@@ -1,67 +1,131 @@
-/* 3D approximation of published OpenF1 car-location coordinates.
-   No inferred racing line, no synthetic track positions or car physics. */
+/* RaceVector WebGL circuit viewer.
+   Measured geometry: OpenF1 approximate car locations, with speed-colored segments.
+   Fallback geometry: MIT-licensed geographic circuit outline, monochrome only.
+   No fictional racing line, positional car markers, or speed coloring is invented. */
 import * as THREE from './vendor/three/three.module.js';
 
-export function createTrack3D(host,laps){
-  if(!host||laps[0]?.positions?.length<3)throw Error('Real car-position telemetry is required for 3D reconstruction');
-  const samples=laps[0].positions;
-  const xs=samples.map(p=>p.x),ys=samples.map(p=>p.y);
-  const midX=(Math.min(...xs)+Math.max(...xs))/2,midY=(Math.min(...ys)+Math.max(...ys))/2;
-  const span=Math.max(Math.max(...xs)-Math.min(...xs),Math.max(...ys)-Math.min(...ys),1);
-  const transform=p=>new THREE.Vector3((p.x-midX)*46/span,0,(p.y-midY)*-46/span);
-  const points=samples.filter((p,i)=>i%Math.max(1,Math.floor(samples.length/650))===0||i===samples.length-1)
-    .map(p=>({t:p.t,position:transform(p)}));
-  const scene=new THREE.Scene();scene.background=new THREE.Color('#080c12');scene.fog=new THREE.FogExp2('#080c12',0.013);
-  const rect=host.getBoundingClientRect();
-  const camera=new THREE.PerspectiveCamera(40,Math.max(1,rect.width)/Math.max(1,rect.height),0.1,200);
-  const renderer=new THREE.WebGLRenderer({antialias:true,alpha:false,powerPreference:'high-performance'});
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.5));renderer.outputColorSpace=THREE.SRGBColorSpace;
-  renderer.setSize(rect.width||600,rect.height||420);host.appendChild(renderer.domElement);
-  renderer.domElement.setAttribute('aria-label','3D reconstructed circuit from approximate recorded car-location samples. Drag to orbit, scroll to zoom.');
-  renderer.domElement.style.touchAction='pan-y';
-  scene.add(new THREE.GridHelper(100,30,0x2c3d48,0x18212c));
-  const halo=new THREE.Mesh(new THREE.CircleGeometry(32,70),new THREE.MeshBasicMaterial({color:0xd7242a,transparent:true,opacity:.025,depthWrite:false}));halo.rotation.x=-Math.PI/2;halo.position.y=-1.35;scene.add(halo);
-  function speedAt(t){const car=laps[0].car;if(!car?.length)return null;let low=0,hi=car.length-1;while(low+1<hi){const m=(low+hi)>>1;if(car[m].t<t)low=m;else hi=m;}const a=car[low],b=car[hi],f=Math.max(0,Math.min(1,(t-a.t)/(b.t-a.t||1)));return a.speed+(b.speed-a.speed)*f;}
-  const curve=new THREE.CatmullRomCurve3(points.map(p=>p.position),false,'centripetal',.2);
-  const geometry=new THREE.TubeGeometry(curve,Math.min(1000,Math.max(64,points.length*2)),.31,8,false);
-  const colors=[];const tubeN=geometry.parameters.tubularSegments,tubeR=geometry.parameters.radialSegments;
-  const c1=new THREE.Color('#ff443f'),c2=new THREE.Color('#49d9e9'),color=new THREE.Color();
-  for(let i=0;i<=tubeN;i++){
-    const t=points[0].t+(points[points.length-1].t-points[0].t)*i/tubeN;
-    const speed=speedAt(t);color.copy(c1).lerp(c2,Math.max(0,Math.min(1,(speed??0)/360)));
-    for(let j=0;j<=tubeR;j++)colors.push(color.r,color.g,color.b);
+function extent(points){
+  const xs=points.map(p=>p.x),ys=points.map(p=>p.y);
+  return {minx:Math.min(...xs),maxx:Math.max(...xs),miny:Math.min(...ys),maxy:Math.max(...ys)};
+}
+function interpolate(items,t){
+  if(!items.length)return null;
+  if(t<=items[0].t)return items[0];
+  if(t>=items[items.length-1].t)return items[items.length-1];
+  let lo=0,hi=items.length-1;
+  while(lo+1<hi){const mid=(lo+hi)>>1;if(items[mid].t<t)lo=mid;else hi=mid;}
+  const a=items[lo],b=items[hi];const f=Math.max(0,Math.min(1,(t-a.t)/(b.t-a.t||1)));
+  return {x:a.x+(b.x-a.x)*f,y:a.y+(b.y-a.y)*f};
+}
+export function createTrack3D(host,{laps=[],outline=null,onError=()=>{}}={}){
+  const measured=Array.isArray(laps[0]?.positions)&&laps[0].positions.length>=6;
+  const positions=measured?laps[0].positions:((window.RaceVectorCircuits?.points(outline))||[]);
+  if(positions.length<4)throw Error('Neither measured car positions nor a licensed circuit outline are available');
+  const bounds=extent(positions);
+  const dx=bounds.maxx-bounds.minx,dy=bounds.maxy-bounds.miny;
+  if(!Number.isFinite(dx+dy)||Math.max(dx,dy)<=0)throw Error('Circuit geometry has no geographic extent');
+  const span=Math.max(dx,dy);
+  const midX=(bounds.minx+bounds.maxx)/2,midY=(bounds.miny+bounds.maxy)/2;
+  const to3d=p=>new THREE.Vector3((p.x-midX)*46/span,0,(p.y-midY)*-46/span);
+  const skip=Math.max(1,Math.ceil(positions.length/600));
+  const sampled=positions.filter((p,i)=>i%skip===0||i===positions.length-1);
+  if(sampled.length<4)throw Error('Too few valid points for a circuit');
+  const scene=new THREE.Scene();scene.background=new THREE.Color('#070b12');
+  scene.fog=new THREE.FogExp2('#070b12',0.011);
+  const camera=new THREE.PerspectiveCamera(40,1,0.1,180);
+  const renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'default'});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.5));
+  renderer.outputColorSpace=THREE.SRGBColorSpace;
+  const canvas=renderer.domElement;
+  canvas.setAttribute('aria-label',measured?'Three-dimensional circuit reconstructed from approximate OpenF1 car locations. Drag to orbit, scroll to zoom.':'Three-dimensional licensed geographic circuit outline. No driver positions are available. Drag to orbit, scroll to zoom.');
+  canvas.style.touchAction='none';
+  host.appendChild(canvas);
+  const grid=new THREE.GridHelper(120,40,0x243242,0x19202c);grid.position.y=-.55;scene.add(grid);
+  const halo=new THREE.Mesh(new THREE.CircleGeometry(35,64),new THREE.MeshBasicMaterial({color:0xff393d,transparent:true,opacity:.022,depthWrite:false}));
+  halo.rotation.x=-Math.PI/2;halo.position.y=-1.3;scene.add(halo);
+  const source=sampled.map(p=>to3d(p));
+  const first=sampled[0],last=sampled[sampled.length-1];
+  const isClosed=Math.hypot(last.x-first.x,last.y-first.y) / span < .025;
+  if(isClosed && source.length>6)source.pop();
+  const curve=new THREE.CatmullRomCurve3(source,isClosed,'centripetal',0.3);
+  const tubeSegments=Math.min(950,Math.max(110,source.length*2));
+  const geometry=new THREE.TubeGeometry(curve,tubeSegments,.34,7,isClosed);
+  if(measured){
+    const colorSlow=new THREE.Color('#ff4247'),colorFast=new THREE.Color('#43d6eb'),mix=new THREE.Color();
+    const colors=[];
+    const timeline=laps[0].car||[];
+    function speedAt(t){
+      if(!timeline.length)return null;
+      if(t<=timeline[0].t)return timeline[0].speed;
+      if(t>=timeline[timeline.length-1].t)return timeline[timeline.length-1].speed;
+      let a=0,b=timeline.length-1;
+      while(a+1<b){const m=(a+b)>>1;if(timeline[m].t<t)a=m;else b=m;}
+      const p=timeline[a],q=timeline[b],f=(t-p.t)/(q.t-p.t||1);
+      return p.speed+(q.speed-p.speed)*f;
+    }
+    for(let i=0;i<=tubeSegments;i++){
+      const sample=sampled[Math.min(sampled.length-1,Math.floor(i/tubeSegments*(sampled.length-1)))];
+      const speed=speedAt(sample.t);
+      mix.copy(colorSlow).lerp(colorFast,Math.max(0,Math.min(1,(speed??0)/360)));
+      for(let j=0;j<=7;j++)colors.push(mix.r,mix.g,mix.b);
+    }
+    geometry.setAttribute('color',new THREE.Float32BufferAttribute(colors,3));
   }
-  geometry.setAttribute('color',new THREE.Float32BufferAttribute(colors,3));
-  const road=new THREE.Mesh(geometry,new THREE.MeshBasicMaterial({vertexColors:true}));road.position.y=.1;scene.add(road);
-  const glow=new THREE.Mesh(geometry.clone(),new THREE.MeshBasicMaterial({vertexColors:true,transparent:true,opacity:.1,blending:THREE.AdditiveBlending,depthWrite:false}));glow.scale.set(1.014,1.1,1.014);glow.position.y=.1;scene.add(glow);
-  const base=new THREE.Mesh(new THREE.TubeGeometry(curve,tubeN,.85,7,false),new THREE.MeshBasicMaterial({color:0x2a333e,transparent:true,opacity:.27,depthWrite:false}));base.position.y=-.12;scene.add(base);
-  const markerA=new THREE.Mesh(new THREE.SphereGeometry(.63,14,12),new THREE.MeshBasicMaterial({color:0xff524a}));
-  const markerB=new THREE.Mesh(new THREE.SphereGeometry(.63,14,12),new THREE.MeshBasicMaterial({color:0x53e5ef}));
-  const auraA=new THREE.Mesh(new THREE.SphereGeometry(.98,14,10),new THREE.MeshBasicMaterial({color:0xff5544,transparent:true,opacity:.18,depthWrite:false}));
-  const auraB=new THREE.Mesh(new THREE.SphereGeometry(.98,14,10),new THREE.MeshBasicMaterial({color:0x55e5ee,transparent:true,opacity:.18,depthWrite:false}));
-  scene.add(markerA,markerB,auraA,auraB);
-  const label=document.createElement('div');label.className='track3d-caption';label.textContent='OPENF1 POSITION / APPROXIMATE GEOMETRY · DRAG TO ORBIT';host.appendChild(label);
-  let theta=-.42,phi=.95,zoom=72,dragging=false,lastX=0,lastY=0,disposed=false,progress=0,lastDraw=0;
-  function moveMarker(lap,mesh,aura,color,percent){
-    if(!lap.positions?.length){mesh.visible=false;aura.visible=false;return;}
-    const target=lap.lap_duration*percent;const data=lap.positions;let lo=0,hi=data.length-1;
-    while(lo+1<hi){const mid=(lo+hi)>>1;if(data[mid].t<target)lo=mid;else hi=mid;}
-    const p=data[lo],q=data[hi],r=Math.max(0,Math.min(1,(target-p.t)/(q.t-p.t||1)));
-    const v=transform({x:p.x+(q.x-p.x)*r,y:p.y+(q.y-p.y)*r});v.y=.8;
-    mesh.position.copy(v);aura.position.copy(v);mesh.visible=true;aura.visible=true;
+  const road=new THREE.Mesh(geometry,new THREE.MeshBasicMaterial(measured?{vertexColors:true}:{color:0xf14a43}));
+  road.position.y=.15;scene.add(road);
+  const glow=new THREE.Mesh(geometry.clone(),new THREE.MeshBasicMaterial(measured?{vertexColors:true,transparent:true,opacity:.17,blending:THREE.AdditiveBlending,depthWrite:false}:{color:0xff5851,transparent:true,opacity:.16,blending:THREE.AdditiveBlending,depthWrite:false}));
+  glow.scale.set(1.025,1.1,1.025);glow.position.y=.15;scene.add(glow);
+  const base=new THREE.Mesh(new THREE.TubeGeometry(curve,tubeSegments,.78,7,isClosed),new THREE.MeshBasicMaterial({color:0x303845,transparent:true,opacity:.38,depthWrite:false}));
+  base.position.y=-.16;scene.add(base);
+  const markers=[0xff5149,0x54e2f0].map(color=>{
+    const marker=new THREE.Mesh(new THREE.SphereGeometry(.56,14,12),new THREE.MeshBasicMaterial({color}));
+    const aura=new THREE.Mesh(new THREE.SphereGeometry(.98,12,8),new THREE.MeshBasicMaterial({color,transparent:true,opacity:.19,depthWrite:false}));
+    marker.visible=false;aura.visible=false;scene.add(marker,aura);return {marker,aura};
+  });
+  const caption=document.createElement('div');caption.className='track3d-caption';
+  caption.textContent=measured?'OPENF1 APPROXIMATE POSITION + MEASURED SPEED · DRAG / ZOOM':'LICENSED GEO CIRCUIT OUTLINE · NO CAR LOCATION AVAILABLE · DRAG / ZOOM';
+  host.appendChild(caption);
+  let theta=-.38,phi=.93,zoom=68,dragging=false,lastX=0,lastY=0,disposed=false,progress=0,lastDraw=0,frameId=0;
+  function resetCamera(){theta=-.38;phi=.93;zoom=68;}
+  function setProgress(value){
+    progress=Math.min(1,Math.max(0,Number(value)||0));
+    for(let i=0;i<2;i++){
+      const lap=laps[i],obj=markers[i];
+      if(!measured||!lap?.positions?.length){obj.marker.visible=false;obj.aura.visible=false;continue;}
+      const p=interpolate(lap.positions,lap.lap_duration*progress);
+      if(!p){obj.marker.visible=false;obj.aura.visible=false;continue;}
+      obj.marker.position.copy(to3d(p));obj.marker.position.y=.82;obj.aura.position.copy(obj.marker.position);
+      obj.marker.visible=true;obj.aura.visible=true;
+    }
   }
-  function setProgress(p){progress=p;moveMarker(laps[0],markerA,auraA,'A',p);moveMarker(laps[1],markerB,auraB,'B',p);}
-  setProgress(0);
-  const down=e=>{dragging=true;lastX=e.clientX;lastY=e.clientY;renderer.domElement.setPointerCapture?.(e.pointerId);};
-  const move=e=>{if(!dragging)return;theta+=(e.clientX-lastX)*.008;phi=Math.max(.36,Math.min(1.38,phi+(e.clientY-lastY)*.006));lastX=e.clientX;lastY=e.clientY;};
+  function resize(){const w=host.clientWidth,h=host.clientHeight;
+    if(!w||!h)return;
+    camera.aspect=w/h;camera.updateProjectionMatrix();renderer.setSize(w,h,false);
+  }
+  const down=e=>{dragging=true;lastX=e.clientX;lastY=e.clientY;canvas.setPointerCapture?.(e.pointerId);};
+  const move=e=>{if(!dragging)return;theta+=(e.clientX-lastX)*.008;phi=Math.max(.25,Math.min(1.39,phi+(e.clientY-lastY)*.006));lastX=e.clientX;lastY=e.clientY;};
   const up=()=>{dragging=false;};
-  const wheel=e=>{e.preventDefault();zoom=Math.max(38,Math.min(115,zoom+e.deltaY*.035));};
-  const canvas=renderer.domElement;canvas.addEventListener('pointerdown',down);canvas.addEventListener('pointermove',move);canvas.addEventListener('pointerup',up);canvas.addEventListener('pointercancel',up);canvas.addEventListener('wheel',wheel,{passive:false});
-  function resize(){const w=host.clientWidth,h=host.clientHeight;if(!w||!h)return;camera.aspect=w/h;camera.updateProjectionMatrix();renderer.setSize(w,h,false);}
-  function frame(now){if(disposed)return;requestAnimationFrame(frame);if(document.hidden||now-lastDraw<30)return;lastDraw=now;
+  const wheel=e=>{e.preventDefault();zoom=Math.max(29,Math.min(105,zoom+e.deltaY*.036));};
+  const lost=e=>{e.preventDefault();onError(Error('3D graphics context was lost. Returned to the 2D circuit.'));};
+  canvas.addEventListener('pointerdown',down);canvas.addEventListener('pointermove',move);canvas.addEventListener('pointerup',up);
+  canvas.addEventListener('pointercancel',up);canvas.addEventListener('wheel',wheel,{passive:false});
+  canvas.addEventListener('webglcontextlost',lost);
+  const resizeObserver='ResizeObserver' in window?new ResizeObserver(resize):null;
+  resizeObserver?.observe(host);
+  resize();setProgress(0);
+  function frame(now){
+    if(disposed)return;
+    frameId=requestAnimationFrame(frame);
+    if(document.hidden||now-lastDraw<33)return;lastDraw=now;
     camera.position.set(Math.sin(theta)*Math.cos(phi)*zoom,Math.sin(phi)*zoom,Math.cos(theta)*Math.cos(phi)*zoom);
     camera.lookAt(0,0,0);renderer.render(scene,camera);
   }
-  requestAnimationFrame(frame);
-  return {setProgress,resize,dispose(){disposed=true;canvas.removeEventListener('pointerdown',down);canvas.removeEventListener('pointermove',move);canvas.removeEventListener('pointerup',up);canvas.removeEventListener('pointercancel',up);canvas.removeEventListener('wheel',wheel);scene.traverse(node=>{node.geometry?.dispose?.();if(node.material){(Array.isArray(node.material)?node.material:[node.material]).forEach(m=>m.dispose());}});renderer.dispose();host.replaceChildren();}};
+  frameId=requestAnimationFrame(frame);
+  return {setProgress,resize,resetCamera,measured,dispose(){
+    if(disposed)return;disposed=true;cancelAnimationFrame(frameId);resizeObserver?.disconnect();
+    canvas.removeEventListener('pointerdown',down);canvas.removeEventListener('pointermove',move);canvas.removeEventListener('pointerup',up);
+    canvas.removeEventListener('pointercancel',up);canvas.removeEventListener('wheel',wheel);canvas.removeEventListener('webglcontextlost',lost);
+    scene.traverse(node=>{node.geometry?.dispose?.();if(node.material){(Array.isArray(node.material)?node.material:[node.material]).forEach(m=>m.dispose());}});
+    renderer.dispose();host.replaceChildren();
+  }};
 }

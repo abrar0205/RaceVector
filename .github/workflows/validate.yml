@@ -24,6 +24,7 @@ jobs:
           node --check web/app.js
           node --check web/model.js
           node --check web/track3d.js
+          node --check web/circuits.js
           python - <<'PYTEST'
           from html.parser import HTMLParser
           from pathlib import Path
@@ -60,3 +61,31 @@ jobs:
             echo 'Model is not accompanied by evaluation report' >&2
             exit 1
           fi
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify circuit matching units
+        run: node --test tests/circuits.test.cjs
+      - name: Vendor exact Three.js runtime and inference assets
+        run: |
+          npm install --prefix /tmp/racevector-vendor --no-package-lock --ignore-scripts --no-audit --no-fund onnxruntime-web@1.22.0 three@0.174.0
+          mkdir -p web/vendor/ort web/vendor/three
+          cp /tmp/racevector-vendor/node_modules/onnxruntime-web/dist/ort.min.js web/vendor/ort/
+          cp /tmp/racevector-vendor/node_modules/onnxruntime-web/dist/ort-wasm*.wasm web/vendor/ort/
+          cp /tmp/racevector-vendor/node_modules/onnxruntime-web/dist/ort-wasm*.mjs web/vendor/ort/
+          cp /tmp/racevector-vendor/node_modules/three/build/three.module.js web/vendor/three/
+          cp /tmp/racevector-vendor/node_modules/three/build/three.core.js web/vendor/three/
+      - name: Install browser QA runner
+        run: |
+          npm install --no-save --ignore-scripts --no-audit --no-fund playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: Browser regression tests (desktop/mobile, 429, circuit 3D)
+        run: node tests/browser.cjs
