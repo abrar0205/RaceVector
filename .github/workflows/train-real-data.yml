@@ -1,6 +1,10 @@
 name: Train RaceVector on real historical telemetry
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/train-real-data.yml'
 permissions:
   contents: read
 jobs:
