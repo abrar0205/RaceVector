@@ -216,3 +216,13 @@ footer{border-color:#503035;color:#aaa0a2}
 @media(max-width:1100px){.selection-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:540px){.selection-heading{flex-wrap:wrap}.selection-grid label{padding:12px}.selection-grid select{font-size:13px}.circuit-controls{gap:5px}.circuit-controls span{display:none}.circuit-controls button{padding:5px;font-size:9px}.neural-content{padding:17px}.activation-nodes{gap:4px}.activation{min-height:27px}.prediction-legend{gap:10px;font-size:8px}.neural-content .neural-label{font-size:42px}}
 @media(prefers-reduced-motion:reduce){.model-pulse{animation:none}.activation{transition:none}}
+
+/* Enforce the HTML hidden attribute: author display rules otherwise override UA [hidden].
+   Without this, loading overlays can permanently mask the 3D renderer. */
+[hidden] { display: none !important; }
+.track-viewport:has(.track3d-stage:not([hidden])):before { opacity: 0.25; }
+.circuit-controls button[aria-pressed="true"] { background:#f04740; color:#fff; border-color:#ff7d73; }
+#reset-camera { border-color:#49424b;background:#181b24; }
+.track3d-caption { max-width:min(275px,80%); }
+.circuit-controls button:focus-visible { outline:2px solid #ffda83;outline-offset:3px; }
+@media(max-width:540px){.circuit-controls button {white-space:nowrap;}}

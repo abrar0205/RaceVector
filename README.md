@@ -6,8 +6,9 @@ RaceVector combines historical OpenF1 Formula 1 telemetry, a browser-based race 
 
 ## What works now
 
-- Responsive cinematic UI prototype, with editorial motorsport visual direction, circuit Canvas rendering and synchronized signal widgets.
+- Responsive cinematic UI prototype, with editorial motorsport visual direction, circuit Canvas/WebGL rendering, licensed circuit outlines and synchronized signal widgets.
 - Automatically refreshed calendar of all OpenF1-listed race weekends (2023 through next year), with completed sessions selectable, upcoming races visible, and direct jump controls for latest completed race / next scheduled session. Source metadata refreshes daily through GitHub Pages Actions.
+- Render a real circuit outline in 2D or 3D using the MIT-licensed bacinger/f1-circuits GeoJSON dataset even when OpenF1 /location returns HTTP 429. Circuit outline mode explicitly does not display car markers or speed-colored positions. Drag to orbit, scroll to zoom, and reset the 3D camera.
 - Load actual historical lap data from OpenF1 with browser Cache Storage and a throttled retry queue, or optionally from a permitted local export; two fastest complete timed laps from different drivers are selected.
 - Select **any two recorded drivers and timed laps**, including different laps by the same driver; compare speed, throttle, braking and lap times, with replay and accessible keyboard controls.
 - Run a real trained PyTorch temporal model in the browser using a reproducible ONNX export. Forecast speed two seconds ahead using the preceding six seconds, overlay predictions against recorded speed, and display actual 32-channel hidden-state activations synchronized to playback.
@@ -89,3 +90,11 @@ Data: https://openf1.org/docs/. Historical use may be free but is subject to ups
 RaceVector uses an **independent motorsport identity**, not official Formula 1/team marks: race red, carbon black, condensed italic racing type, telemetry cyan for comparison and bold track graphics. The first UI is a purposeful prototype. The final React/Three.js workbench is planned as the next milestone, subject to real-data verification and visual QA.
 
 - `Publish evaluated neural model to RaceVector` imports the previously validated ONNX model and its test report into the public application without republishing source car telemetry.
+
+## Circuit 3D reliability and provenance
+
+The Pages build copies **both** `three.module.js` and its required `three.core.js`, and ensures HTML `[hidden]` is respected for the 2D canvas and overlay. This fixes two defects that previously masked or prevented the WebGL canvas.
+
+Circuit geometry is downloaded at build time from [`bacinger/f1-circuits`](https://github.com/bacinger/f1-circuits), pinned to commit `8094e957b8d6aa8b9f4510c93968556cccd30e02` (MIT, © Tomislav Bacinger). The full copyright and permission notice is published as `data/CIRCUITS-LICENSE.txt`. Geographic outlines are **not** OpenF1 car trajectories. The 3D viewer renders neutral circuit geometry when position samples are missing; car markers and measured speed coloring are used only when the requested real location data exists. If WebGL cannot start, the same authentic outline remains available in 2D.
+
+Browser CI tests cover desktop/mobile, HTML `hidden` layering, 2D/3D toggles, camera reset, real-data flow with HTTP 429 location fallback, and driver/lap comparison. Test fixtures are synthetic and never deployed as actual F1 records.

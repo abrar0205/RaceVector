@@ -26,6 +26,8 @@ jobs:
           python-version: '3.12'
       - name: Build real historical and future race calendar (metadata only)
         run: python -m pipeline.catalog --out web/data/catalog.json
+      - name: Build pinned MIT-licensed circuit outlines (no telemetry)
+        run: python -m pipeline.circuits
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -37,6 +39,8 @@ jobs:
           cp /tmp/racevector-vendor/node_modules/onnxruntime-web/dist/ort-wasm*.wasm web/vendor/ort/
           cp /tmp/racevector-vendor/node_modules/onnxruntime-web/dist/ort-wasm*.mjs web/vendor/ort/
           cp /tmp/racevector-vendor/node_modules/three/build/three.module.js web/vendor/three/
+          cp /tmp/racevector-vendor/node_modules/three/build/three.core.js web/vendor/three/
+          cp /tmp/racevector-vendor/node_modules/three/LICENSE web/vendor/three/LICENSE
       - name: Verify model metadata is real when model is present
         run: |
           python - <<'PY'
@@ -53,7 +57,7 @@ jobs:
           PY
       - name: Prevent accidental publication of raw telemetry
         run: |
-          if find web/data -type f ! -name catalog.json -print -quit | grep -q .; then
+          if find web/data -type f ! -name catalog.json ! -name circuits.geojson ! -name CIRCUITS-LICENSE.txt -print -quit | grep -q .; then
             echo 'Refusing to publish recorded telemetry without rights review' >&2
             exit 1
           fi

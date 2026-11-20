@@ -15,6 +15,55 @@ let catalog = null;
 let activeMeeting = null;
 let driverMetadataSession=null, driverData=new Map(), sessionLapIndex=[];
 let current3d=null, view3dLoaded=false, requested3d=true;
+function hasWebGL2(){
+  try {return !!document.createElement('canvas').getContext('webgl2',{failIfMajorPerformanceCaveat:false});}
+  catch {return false;}
+}
+let circuitOutline=null, circuitRequest=0, cannotUse3D=!hasWebGL2(), viewTicket=0;
+function clear3d(){
+  ++viewTicket;
+  current3d?.dispose();current3d=null;view3dLoaded=false;
+  $('track-3d-stage').hidden=true;el.track.hidden=false;
+  $('view-mode').textContent='3D VIEW ↗';$('view-mode').setAttribute('aria-pressed','false');
+  $('reset-camera').hidden=true;
+}
+function hasCircuit(){return state.laps[0]?.positions?.length>=4 || (window.RaceVectorCircuits?.points(circuitOutline)?.length>=4);}
+function updateCircuitMetadata(){
+  const measured=state.laps[0]?.positions?.length>=4;
+  const fallback=!!circuitOutline;
+  $('view-mode').disabled=!hasCircuit()||cannotUse3D;
+  $('view-mode').title=cannotUse3D?'3D requires WebGL2 and graphics acceleration. The licensed 2D outline remains available.':'Drag the 3D circuit to orbit and scroll to zoom';
+  const source=measured?'OPENF1 RECORDED POSITIONS':fallback?'LICENSED GEO OUTLINE':'NO GEOMETRY';
+  $('track-source').textContent=source;
+  $('track-meta').textContent=measured?'MEASURED / APPROX':fallback?'GEO OUTLINE':'UNAVAILABLE';
+  $('track-provenance').textContent=measured?'OPENF1 APPROX. CAR LOCATION / SPEED COLORING':fallback?'MIT GEO OUTLINE / NOT RECORDED CAR LOCATION':'NO TRACK COORDINATES AVAILABLE';
+  const overlay=$('track-overlay');overlay.hidden=hasCircuit();
+  if(!hasCircuit()){
+    overlay.querySelector('strong').textContent='CIRCUIT DATA UNAVAILABLE';
+    overlay.querySelector('p').textContent='Choose another Grand Prix, or load recorded telemetry. No geometry is invented when sources are unavailable.';
+  }
+  drawTrack();
+}
+async function updateCircuitOutline(){
+  const ticket=++circuitRequest,meeting=activeMeeting;
+  circuitOutline=null;
+  clear3d();
+  updateCircuitMetadata();
+  if(!meeting)return;
+  try{
+    const features=await window.RaceVectorCircuits.load();
+    if(ticket!==circuitRequest)return;
+    circuitOutline=window.RaceVectorCircuits.pick(features,meeting);
+    updateCircuitMetadata();
+    if(hasCircuit() && requested3d && window.innerWidth>=760 && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches){
+      await enable3d();
+    }
+  }catch(error){
+    if(ticket!==circuitRequest)return;
+    console.warn('RaceVector circuit outline unavailable:',error.message);
+    updateCircuitMetadata();
+  }
+}
 let modelJob=0;
 
 let apiQueue = Promise.resolve();
@@ -226,6 +275,14 @@ function populateSessions(preferredSession=null){
   syncSelection();
 }
 function syncSelection(){
+  const newlySelected=selectedSession()?.session_key;
+  if(state.session && state.session.session_key!==newlySelected){
+    cancelAnimationFrame(state.animationId);pause();state.laps=[];state.session=null;state.predictionsA=[];
+    el.play.disabled=true;el.scrub.disabled=true;el.restart.disabled=true;
+    el.chartA.setAttribute('d','');el.chartB.setAttribute('d','');$('chart-predicted').setAttribute('d','');
+    ++modelJob;
+  }
+  void updateCircuitOutline();
   if(driverMetadataSession!==selectedSession()?.session_key){$('driver-chooser').hidden=true;}
   const s=selectedSession(),valid=ready(s);
   el.load.disabled=!valid;
@@ -272,9 +329,8 @@ async function initCatalog(){
 
 async function load(){
   const ticket=++modelJob;
-  if(current3d){current3d.dispose();current3d=null;}
-  $('track-3d-stage').hidden=true;el.track.hidden=false;view3dLoaded=false;
-  $('view-mode').disabled=true;$('view-mode').textContent='3D VIEW ↗';
+  clear3d();
+  $('view-mode').disabled=true;
   const predictions=$('chart-predicted');if(predictions)predictions.setAttribute('d','');
   $('forecast-status').textContent='AWAITING MODEL INFERENCE';
   $('activation-nodes').replaceChildren();
@@ -288,22 +344,21 @@ async function load(){
   try{
     const data=await loadLocal()||await loadOnline();
     state.laps=data.laps;state.session=data.session;state.progress=0;
-    const trackAvailable=state.laps[0].positions.length>=3;
+    const recordedPositions=state.laps[0].positions.length>=4;
+    const trackAvailable=hasCircuit();
     el.overlay.hidden=trackAvailable;
     if(!trackAvailable){
-      el.overlay.querySelector('strong').textContent='POSITION DATA UNAVAILABLE';
-      el.overlay.querySelector('p').textContent='Recorded speed, throttle, braking and both lap traces are available below. OpenF1 location samples are currently missing or rate-limited; the charts still work.';
+      el.overlay.querySelector('strong').textContent='CIRCUIT DATA UNAVAILABLE';
+      el.overlay.querySelector('p').textContent='Recorded speed, throttle, braking and lap traces remain usable. Neither location samples nor the licensed circuit outline are available.';
     }
     el.a.textContent=data.laps[0].name;el.b.textContent=data.laps[1].name;
     el.at.textContent=pretty(data.laps[0].lap_duration);el.bt.textContent=pretty(data.laps[1].lap_duration);
     $('legend-a').textContent=data.laps[0].name;$('legend-b').textContent=data.laps[1].name;
-    $('track-source').textContent=trackAvailable?(activeMeeting?.circuit_short_name||'APPROXIMATE LOCATIONS'):'POSITION FEED UNAVAILABLE';
-    $('track-meta').textContent=trackAvailable?(activeMeeting?.circuit_short_name||'AVAILABLE'):'TELEMETRY ONLY';
+    updateCircuitMetadata();
     $('provenance-session').textContent='SESSION '+data.session.session_key+' / '+(data.session.session_name||el.session.value);
     el.play.disabled=false;el.restart.disabled=false;el.scrub.disabled=false;
-    renderChart();render();setStatus(trackAvailable?'REAL SESSION LOADED':'TELEMETRY LOADED / TRACK OPTIONAL','active');
-    $('view-mode').disabled=!trackAvailable;
-    if(trackAvailable&&requested3d&&window.innerWidth>=760&&!(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches))enable3d();
+    renderChart();render();setStatus(recordedPositions?'RECORDED CAR POSITIONS + TELEMETRY':trackAvailable?'REAL TELEMETRY / LICENSED OUTLINE':'REAL TELEMETRY / NO CIRCUIT GEOMETRY','active');
+    if(trackAvailable&&requested3d&&window.innerWidth>=760&&!(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches))void enable3d();
     startModelInference(ticket,data.laps[0]);
   }catch(error){setStatus('DATA NOT AVAILABLE','error');el.overlay.hidden=false;el.overlay.querySelector('strong').textContent='TELEMETRY NOT AVAILABLE';el.overlay.querySelector('p').textContent=error.message+' You can also pre-export a real historical session using the ingestion script.';}
   finally{el.load.disabled=!ready(selectedSession());el.load.innerHTML='LOAD RECORDED SESSION <span>↗</span>';}
@@ -353,20 +408,24 @@ function drawTrack(){
   const can=el.track,rect=can.getBoundingClientRect(),dpr=Math.min(window.devicePixelRatio||1,2),w=Math.max(1,rect.width),h=Math.max(1,rect.height);
   const cw=Math.ceil(w*dpr),ch=Math.ceil(h*dpr);if(can.width!==cw||can.height!==ch){can.width=cw;can.height=ch;}const ctx=can.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
   ctx.strokeStyle='rgba(175,217,173,.06)';ctx.lineWidth=1;for(let x=0;x<w;x+=28){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke();}for(let y=0;y<h;y+=28){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}
-  if(!state.laps.length||state.laps[0].positions.length<3)return;
-  const a=state.laps[0],b=state.laps[1],points=project(a.positions,w,h);
+  const hasMeasured=state.laps[0]?.positions?.length>=4;
+  const measured=hasMeasured?state.laps[0].positions:null;
+  const geometry=measured||(window.RaceVectorCircuits?.points(circuitOutline)||[]);
+  if(geometry.length<4)return;
+  const a=state.laps[0],b=state.laps[1],points=project(geometry,w,h);
   function strokePath(line,width,color,blur=0){ctx.beginPath();line.forEach((p,i)=>i?ctx.lineTo(p.px,p.py):ctx.moveTo(p.px,p.py));ctx.strokeStyle=color;ctx.lineWidth=width;ctx.lineJoin='round';ctx.lineCap='round';ctx.shadowBlur=blur;ctx.shadowColor=color;ctx.stroke();ctx.shadowBlur=0;}
   strokePath(points,17,'rgba(35,54,47,.9)');strokePath(points,9,'rgba(76,99,87,.75)');
-  const maxT=a.lap_duration;for(let i=1;i<points.length;i++){
-    const p=points[i-1],q=points[i],v=interpAt(a.car,(p.t+q.t)/2)?.speed??0;
-    const hue=Math.max(0,Math.min(190,190-v/380*190));
-    ctx.beginPath();ctx.moveTo(p.px,p.py);ctx.lineTo(q.px,q.py);ctx.strokeStyle=`hsl(${hue} 83% 66%)`;ctx.lineWidth=3.5;ctx.shadowColor=ctx.strokeStyle;ctx.shadowBlur=6;ctx.stroke();ctx.shadowBlur=0;
+  for(let i=1;i<points.length;i++){
+    const p=points[i-1],q=points[i];
+    const v=hasMeasured?interpAt(a.car,(p.t+q.t)/2)?.speed:null;
+    const hue=Math.max(0,Math.min(190,190-(v??0)/380*190));
+    ctx.beginPath();ctx.moveTo(p.px,p.py);ctx.lineTo(q.px,q.py);ctx.strokeStyle=hasMeasured?`hsl(${hue} 83% 66%)`:'#f14a43';ctx.lineWidth=3.5;ctx.shadowColor=ctx.strokeStyle;ctx.shadowBlur=6;ctx.stroke();ctx.shadowBlur=0;
   }
   function marker(lap,color,letter){if(lap.positions.length<2)return;const p=interpAt(lap.positions,lap.lap_duration*state.progress);if(!p||p.x==null)return;
     const minx=Math.min(...a.positions.map(q=>q.x)),maxx=Math.max(...a.positions.map(q=>q.x)),miny=Math.min(...a.positions.map(q=>q.y)),maxy=Math.max(...a.positions.map(q=>q.y)),scale=Math.min(w*.76/Math.max(1,maxx-minx),h*.74/Math.max(1,maxy-miny));
     const x=(w-(maxx-minx)*scale)/2+(p.x-minx)*scale,y=h-((h-(maxy-miny)*scale)/2+(p.y-miny)*scale);
     ctx.beginPath();ctx.arc(x,y,14,0,Math.PI*2);ctx.fillStyle=color+'27';ctx.fill();ctx.beginPath();ctx.arc(x,y,6,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();ctx.fillStyle='#10171c';ctx.font='bold 10px monospace';ctx.textAlign='center';ctx.fillText(letter,x,y-19);
-  }marker(a,'#ff4540','A');marker(b,'#42d7e6','B');
+  }if(hasMeasured){marker(a,'#ff4540','A');marker(b,'#42d7e6','B');}
 }
 // ONNX predictions are generated from actual recorded telemetry windows, not demo samples.
 function closestForecast(t){
@@ -430,27 +489,37 @@ async function startModelInference(ticket,lap){
     console.warn('RaceVector neural prediction:',error);
   }
 }
+function on3dError(error){
+  clear3d();
+  cannotUse3D=true;
+  updateCircuitMetadata();
+  setStatus('3D GRAPHICS UNAVAILABLE / 2D ACTIVE','error');
+  $('track-source').textContent='2D / 3D UNAVAILABLE';
+  console.warn('RaceVector 3D unavailable:',error);
+}
 async function enable3d(){
-  if(current3d){$('track-3d-stage').hidden=false;el.track.hidden=true;view3dLoaded=true;$('view-mode').textContent='2D VIEW ↗';return;}
-  if(state.laps[0]?.positions?.length<3)return;
-  const stage=$('track-3d-stage');
+  if(!hasCircuit()||cannotUse3D)return;
+  if(current3d){$('track-3d-stage').hidden=false;el.track.hidden=true;view3dLoaded=true;
+    $('view-mode').textContent='2D VIEW ↗';$('view-mode').setAttribute('aria-pressed','true');$('reset-camera').hidden=false;return;
+  }
+  const stage=$('track-3d-stage'),ticket=viewTicket;
   try{
     const trackModule=await import('./track3d.js');
-    if(!state.laps.length)return;
+    if(ticket!==viewTicket||!hasCircuit())return;
     stage.hidden=false;el.track.hidden=true;
-    current3d=trackModule.createTrack3D(stage,state.laps);
-    current3d.setProgress(state.progress);
-    view3dLoaded=true;$('view-mode').textContent='2D VIEW ↗';
-  }catch(error){stage.hidden=true;el.track.hidden=false;view3dLoaded=false;$('view-mode').disabled=true;
-    $('track-source').textContent='2D FALLBACK / 3D NOT SUPPORTED';
-    console.warn('RaceVector 3D unavailable:',error);
-  }
+    const created=trackModule.createTrack3D(stage,{laps:state.laps,outline:circuitOutline,onError:on3dError});
+    if(ticket!==viewTicket){created.dispose();stage.hidden=true;el.track.hidden=false;return;}
+    current3d=created;current3d.setProgress(state.progress);
+    view3dLoaded=true;el.overlay.hidden=true;
+    $('view-mode').textContent='2D VIEW ↗';$('view-mode').setAttribute('aria-pressed','true');$('reset-camera').hidden=false;
+    setStatus(created.measured?'3D / RECORDED CAR POSITIONS':'3D / LICENSED CIRCUIT OUTLINE','active');
+  }catch(error){on3dError(error);}
 }
 function toggleView(){
-  requested3d=!view3dLoaded;
-  if(view3dLoaded){$('track-3d-stage').hidden=true;el.track.hidden=false;view3dLoaded=false;$('view-mode').textContent='3D VIEW ↗';drawTrack();}
-  else enable3d();
+  if(view3dLoaded){requested3d=false;clear3d();updateCircuitMetadata();}
+  else {requested3d=true;void enable3d();}
 }
+$('reset-camera').addEventListener('click',()=>current3d?.resetCamera());
 $('view-mode').addEventListener('click',toggleView);
 $('select-driver-a').addEventListener('change',()=>{populateLapSelect('a');setStatus('SELECTION CHANGED / LOAD TO APPLY');});
 $('select-driver-b').addEventListener('change',()=>{populateLapSelect('b');setStatus('SELECTION CHANGED / LOAD TO APPLY');});

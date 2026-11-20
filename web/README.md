@@ -11,3 +11,6 @@ Future UI work: Three.js + React Three Fiber GPU-enhanced track ribbon based on 
 
 ## Neural inference and dimensional track
 The Pages deployment vendors pinned ONNX Runtime Web and Three.js assets into `web/vendor/`, while the verified training artifact is committed into `web/models/` by a separate publishing workflow. The web model forecasts speed 2 seconds ahead from 6 seconds of recorded telemetry. The neural panel shows **actual 32-channel TCN hidden states**, not weight visualizations or feature attributions. The 3D track is only available when approximate real OpenF1 location samples have been retrieved; otherwise the recorded speed/2D view stays available.
+
+### 3D viewer source and fallback
+The circuit can be shown as a geographic outline (MIT-licensed bacinger/f1-circuits) even without OpenF1 position telemetry. It is a location-independent outline, **not** an inferred race line or a measured driver path. In measured mode, the circuit derives from OpenF1 approximate car locations and speed color is measured.
