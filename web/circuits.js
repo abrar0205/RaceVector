@@ -40,7 +40,7 @@
     const venue=normalize(meeting.meeting_name);
     const country=normalize(meeting.country_name);
     const keys=[circuit,venue,country].filter(Boolean);
-    const candidates = keys.map(k=>aliases[k] || k);
+    const candidates = keys.map((key,i)=>({value:aliases[key]||key,weight:300-i*100}));
     let winner=null,score=0;
     for (const feature of features) {
       const name=normalize(feature?.properties?.Name);
@@ -48,9 +48,9 @@
       if (!name || feature.geometry?.type !== 'LineString' || !Array.isArray(feature.geometry.coordinates) || feature.geometry.coordinates.length<4) continue;
       let points=0;
       for (const candidate of candidates) {
-        if (candidate===name) points=Math.max(points,100);
-        else if (candidate===city && city.length>3) points=Math.max(points,80);
-        else if (candidate.length>4 && name.includes(candidate)) points=Math.max(points,50);
+        if (candidate.value===name) points=Math.max(points,candidate.weight+100);
+        else if (candidate.value===city && city.length>3) points=Math.max(points,candidate.weight+80);
+        else if (candidate.value.length>4 && name.includes(candidate.value)) points=Math.max(points,candidate.weight+50);
       }
       if (points>score) {winner=feature;score=points;}
     }
