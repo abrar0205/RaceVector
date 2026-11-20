@@ -20,11 +20,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node --check web/app.js
+      - run: |
+          node --check web/app.js
+          node --check web/model.js
+          node --check web/track3d.js
+          python - <<'PYTEST'
+          from html.parser import HTMLParser
+          from pathlib import Path
+          text=Path('web/index.html').read_text()
+          required=('select-driver-a','select-lap-a','select-driver-b','select-lap-b','chart-predicted','activation-nodes','track-3d-stage','view-mode','model-prediction','model-observed')
+          for element_id in required:
+              assert f'id="{element_id}"' in text, element_id
+          PYTEST
       - name: Confirm no model success is claimed without evaluation
         shell: bash
         run: |
-          if test -f web/model/racevector.onnx && ! test -f web/model/evaluation.json; then
+          if test -f web/models/racevector.onnx && ! test -f web/models/evaluation.json; then
             echo 'Model is not accompanied by evaluation report' >&2
             exit 1
           fi

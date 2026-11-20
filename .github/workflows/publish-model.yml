@@ -1,0 +1,48 @@
+name: Publish evaluated neural model to RaceVector
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-model.yml'
+permissions:
+  contents: write
+  actions: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Retrieve the already-evaluated REAL OpenF1 training artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: racevector-2024-qualifying-evaluated
+          run-id: 44777956794
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: source-artifact
+      - name: Verify provenance and evaluation before publication
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('source-artifact')
+          report=json.loads((root/'evaluation.json').read_text())
+          assert report['source']=='OpenF1 historical API'
+          assert report['window_samples']==12 and report['horizon_seconds']==2
+          assert len(set(sum(report['meeting_splits'].values(),[])))>=4
+          assert report['n_windows']['test']>=20
+          assert all((root/p).stat().st_size>200 for p in ('racevector.onnx','evaluation.json'))
+          print('Model test MAE:',report['test_model']['mae_kmh'])
+          print('Persistence baseline MAE:',report['test_persistence_baseline']['mae_kmh'])
+          PY
+      - name: Publish only trained weights and verified evaluation (never raw F1 telemetry)
+        run: |
+          mkdir -p web/models
+          cp source-artifact/racevector.onnx web/models/racevector.onnx
+          cp source-artifact/evaluation.json web/models/evaluation.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web/models/racevector.onnx web/models/evaluation.json
+          if git diff --cached --quiet; then echo 'Model already up to date'; exit 0; fi
+          git commit -m 'Publish verified 2024 OpenF1 trained ONNX model and evaluation'
+          git push origin HEAD:main

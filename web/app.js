@@ -13,6 +13,10 @@ const el = {
 let state = {laps:[],progress:0,playing:false,previousFrame:0,animationId:0,session:null};
 let catalog = null;
 let activeMeeting = null;
+let driverMetadataSession=null, driverData=new Map(), sessionLapIndex=[];
+let current3d=null, view3dLoaded=false, requested3d=true;
+let modelJob=0;
+
 let apiQueue = Promise.resolve();
 let lastApiCall = 0;
 const READY_DELAY = 31 * 60 * 1000; // OpenF1 historical access starts 30 minutes after a session ends.
@@ -101,31 +105,77 @@ async function fetchCarLap(session,driver,lap){
   return {driver_number:driver.driver_number,name:driver.name_acronym||driver.broadcast_name||String(driver.driver_number),fullName:driver.full_name||'',lap_duration:lap.lap_duration,
     session_key:session.session_key,meeting_key:session.meeting_key,car:cleanSamples(car,start,end),positions:[],query,start,end};
 }
+function validTimedLap(lap){
+  const duration=NUM(lap.lap_duration);
+  return duration!=null&&duration>=45&&duration<=360&&lap.date_start&&lap.is_pit_out_lap!==true;
+}
+function orderedDrivers(){
+  const fastest=new Map();
+  for(const l of sessionLapIndex){
+    if(!validTimedLap(l)||!driverData.has(l.driver_number))continue;
+    const previous=fastest.get(l.driver_number);
+    if(!previous||l.lap_duration<previous)fastest.set(l.driver_number,l.lap_duration);
+  }
+  return [...fastest.keys()].sort((a,b)=>fastest.get(a)-fastest.get(b));
+}
+function populateDriverSelects(){
+  const nums=orderedDrivers();
+  if(!nums.length)throw Error('No recorded valid timed laps for this session.');
+  const best=fastestLaps(sessionLapIndex,new Set(nums));
+  const selected=[best[0]?.driver_number??nums[0],best[1]?.driver_number??nums[1]??nums[0]];
+  ['a','b'].forEach((side,i)=>{
+    const control=$('select-driver-'+side),previous=Number(control.value);
+    control.replaceChildren(...nums.map(number=>{
+      const d=driverData.get(number),option=document.createElement('option');option.value=String(number);
+      option.textContent=(d?.name_acronym||d?.full_name||'#'+number)+' / #'+number;return option;
+    }));
+    control.value=String(nums.includes(previous)?previous:selected[i]);
+    populateLapSelect(side);
+  });
+  $('selection-note').textContent=nums.length+' DRIVERS · '+sessionLapIndex.filter(validTimedLap).length+' RECORDED TIMED LAPS · SELECT ANY TWO';
+  $('driver-chooser').hidden=false;
+}
+function populateLapSelect(side){
+  const control=$('select-lap-'+side),driverNumber=Number($('select-driver-'+side).value);
+  const laps=sessionLapIndex.filter(l=>l.driver_number===driverNumber&&validTimedLap(l))
+    .sort((a,b)=>a.lap_duration-b.lap_duration);
+  const previous=control.value;
+  control.replaceChildren(...laps.map(l=>{
+    const option=document.createElement('option');option.value=String(l.lap_number);
+    option.textContent='LAP '+l.lap_number+' · '+Number(l.lap_duration).toFixed(3)+' S';return option;
+  }));
+  if(laps.some(l=>String(l.lap_number)===previous))control.value=previous;
+}
+function chosenLap(side){
+  const n=Number($('select-driver-'+side).value),lapN=Number($('select-lap-'+side).value);
+  const lap=sessionLapIndex.find(l=>l.driver_number===n&&l.lap_number===lapN&&validTimedLap(l));
+  if(!lap)throw Error('Choose a valid driver and recorded lap.');
+  return {lap,driver:driverData.get(n)};
+}
 async function loadOnline(){
   const session=selectedSession();
   if(!session||!ready(session))throw new Error('This session is scheduled or still within the historical-data delay. Select a completed session.');
-  // Session metadata is prebuilt once daily. Only two small metadata queries and
-  // two measured car traces are required to display charts and driver comparison.
-  const drivers=await request('drivers',{session_key:session.session_key});
-  const laps=await request('laps',{session_key:session.session_key});
-  const distinct=new Map(drivers.map(d=>[d.driver_number,d]));
-  const selected=fastestLaps(laps,new Set(distinct.keys()));
-  if(selected.length<2)throw new Error('This session does not yet have two complete timed laps. Try another session.');
-  const output=[];
-  for(const lap of selected){
-    const l=await fetchCarLap(session,distinct.get(lap.driver_number),lap);
-    if(l.car.length<12)throw new Error('Selected lap telemetry is incomplete. Try another session.');
-    output.push(l);
+  if(driverMetadataSession!==session.session_key){
+    const [drivers,laps]=await Promise.all([request('drivers',{session_key:session.session_key}),request('laps',{session_key:session.session_key})]);
+    driverData=new Map(drivers.map(d=>[d.driver_number,d]));sessionLapIndex=laps;
+    driverMetadataSession=session.session_key;
+    populateDriverSelects();
   }
-  // Positions are OPTIONAL and never block speed traces. Keep requests serial;
-  // a 429 for the first track request skips the second to respect the free API.
+  const picked=[chosenLap('a'),chosenLap('b')];
+  const output=[];
+  for(const {lap,driver} of picked){
+    const result=await fetchCarLap(session,driver,lap);
+    if(result.car.length<12)throw new Error('Selected lap telemetry is incomplete. Choose a different recorded lap.');
+    output.push(result);
+  }
+  // Optional track positions must never prevent speed/AI playback. Sequential requests.
   for(const l of output){
     const pos=await request('location',l.query,{optional:true});
     l.positions=cleanLocation(pos,l.start,l.end);
     delete l.query;delete l.start;delete l.end;
     if(l.positions.length<3)break;
   }
-  return {session, laps:output};
+  return {session,laps:output};
 }
 async function loadLocal(){
   // Local historical exports are optional. The public Pages build ships only
@@ -176,6 +226,7 @@ function populateSessions(preferredSession=null){
   syncSelection();
 }
 function syncSelection(){
+  if(driverMetadataSession!==selectedSession()?.session_key){$('driver-chooser').hidden=true;}
   const s=selectedSession(),valid=ready(s);
   el.load.disabled=!valid;
   el.load.innerHTML=(valid?'LOAD RECORDED SESSION':'AWAITING SESSION')+' <span>↗</span>';
@@ -220,8 +271,15 @@ async function initCatalog(){
 }
 
 async function load(){
+  const ticket=++modelJob;
+  if(current3d){current3d.dispose();current3d=null;}
+  $('track-3d-stage').hidden=true;el.track.hidden=false;view3dLoaded=false;
+  $('view-mode').disabled=true;$('view-mode').textContent='3D VIEW ↗';
+  const predictions=$('chart-predicted');if(predictions)predictions.setAttribute('d','');
+  $('forecast-status').textContent='AWAITING MODEL INFERENCE';
+  $('activation-nodes').replaceChildren();
   cancelAnimationFrame(state.animationId);state.playing=false;state.progress=0;state.previousFrame=0;
-  state.laps=[];state.session=null;el.play.disabled=true;el.restart.disabled=true;el.scrub.disabled=true;
+  state.laps=[];state.session=null;state.predictionsA=[];el.play.disabled=true;el.restart.disabled=true;el.scrub.disabled=true;
   el.chartA.setAttribute('d','');el.chartB.setAttribute('d','');el.a.textContent='—';el.b.textContent='—';el.at.textContent='NO LAP';el.bt.textContent='NO LAP';
   el.speedA.textContent='—';el.speedB.textContent='—';el.throttle.style.width='0%';el.brake.style.width='0%';el.throttleN.textContent='—';el.brakeN.textContent='—';
   el.overlay.hidden=false;el.overlay.querySelector('strong').textContent='LOADING REAL TELEMETRY';el.overlay.querySelector('p').textContent='Requesting recorded lap times and car samples from the historical source.';drawTrack();
@@ -244,6 +302,9 @@ async function load(){
     $('provenance-session').textContent='SESSION '+data.session.session_key+' / '+(data.session.session_name||el.session.value);
     el.play.disabled=false;el.restart.disabled=false;el.scrub.disabled=false;
     renderChart();render();setStatus(trackAvailable?'REAL SESSION LOADED':'TELEMETRY LOADED / TRACK OPTIONAL','active');
+    $('view-mode').disabled=!trackAvailable;
+    if(trackAvailable&&requested3d&&window.innerWidth>=760&&!(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches))enable3d();
+    startModelInference(ticket,data.laps[0]);
   }catch(error){setStatus('DATA NOT AVAILABLE','error');el.overlay.hidden=false;el.overlay.querySelector('strong').textContent='TELEMETRY NOT AVAILABLE';el.overlay.querySelector('p').textContent=error.message+' You can also pre-export a real historical session using the ingestion script.';}
   finally{el.load.disabled=!ready(selectedSession());el.load.innerHTML='LOAD RECORDED SESSION <span>↗</span>';}
 }
@@ -259,7 +320,13 @@ function interpAt(items,t){
 function plot(samples,duration){if(samples.length<2)return '';
   return samples.map((p,i)=>`${i?'L':'M'}${(28+852*p.t/duration).toFixed(1)},${(216-178*Math.min(380,Math.max(0,p.speed))/380).toFixed(1)}`).join(' ');
 }
-function renderChart(){const [a,b]=state.laps;el.chartA.setAttribute('d',plot(a.car,a.lap_duration));el.chartB.setAttribute('d',plot(b.car,b.lap_duration));}
+function renderChart(){const [a,b]=state.laps;el.chartA.setAttribute('d',plot(a.car,a.lap_duration));el.chartB.setAttribute('d',plot(b.car,b.lap_duration));
+  if($('chart-predicted'))$('chart-predicted').setAttribute('d',plotPrediction(state.predictionsA||[],a.lap_duration));
+}
+function plotPrediction(samples,duration){
+  if(samples.length<2)return '';
+  return samples.map((p,i)=>`${i?'L':'M'}${(28+852*p.t/duration).toFixed(1)},${(216-178*Math.min(380,Math.max(0,p.predicted))/380).toFixed(1)}`).join(' ');
+}
 function render(){if(!state.laps.length)return;
   const [a,b]=state.laps,pa=interpAt(a.car,state.progress*a.lap_duration),pb=interpAt(b.car,state.progress*b.lap_duration);
   const val=x=>Number.isFinite(x)?Math.round(x).toLocaleString('en-GB'):'—';
@@ -268,6 +335,7 @@ function render(){if(!state.laps.length)return;
   el.brake.style.width=(Number.isFinite(pa?.brake)?Math.min(100,Math.max(0,pa.brake*100)):0)+'%';
   el.throttleN.textContent=Number.isFinite(pa?.throttle)?Math.round(pa.throttle)+'%':'—';el.brakeN.textContent=Number.isFinite(pa?.brake)?pa.brake>.5?'ON':'OFF':'—';
   el.time.textContent=clock(state.progress*a.lap_duration);el.percent.textContent=String(Math.round(state.progress*100)).padStart(2,'0')+'%';
+  renderModelFrame(state.progress*a.lap_duration);if(current3d)current3d.setProgress(state.progress);
   el.scrub.value=String(Math.round(state.progress*1000));const x=28+state.progress*852;el.cursor.setAttribute('x1',String(x));el.cursor.setAttribute('x2',String(x));drawTrack();
 }
 function frame(timestamp){if(!state.playing)return;if(state.previousFrame){let dt=Math.min(timestamp-state.previousFrame,80);state.progress+=dt/(state.laps[0].lap_duration*1000)*Number(document.getElementById('replay-rate')?.value||2.5);}
@@ -281,6 +349,7 @@ function project(pos,w,h){let xs=pos.map(p=>p.x),ys=pos.map(p=>p.y);const minx=M
   return pos.map(p=>({...p,px:ox+(p.x-minx)*scale,py:h-(oy+(p.y-miny)*scale)}));
 }
 function drawTrack(){
+  if(view3dLoaded)return;
   const can=el.track,rect=can.getBoundingClientRect(),dpr=Math.min(window.devicePixelRatio||1,2),w=Math.max(1,rect.width),h=Math.max(1,rect.height);
   const cw=Math.ceil(w*dpr),ch=Math.ceil(h*dpr);if(can.width!==cw||can.height!==ch){can.width=cw;can.height=ch;}const ctx=can.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
   ctx.strokeStyle='rgba(175,217,173,.06)';ctx.lineWidth=1;for(let x=0;x<w;x+=28){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke();}for(let y=0;y<h;y+=28){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}
@@ -299,11 +368,100 @@ function drawTrack(){
     ctx.beginPath();ctx.arc(x,y,14,0,Math.PI*2);ctx.fillStyle=color+'27';ctx.fill();ctx.beginPath();ctx.arc(x,y,6,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();ctx.fillStyle='#10171c';ctx.font='bold 10px monospace';ctx.textAlign='center';ctx.fillText(letter,x,y-19);
   }marker(a,'#ff4540','A');marker(b,'#42d7e6','B');
 }
+// ONNX predictions are generated from actual recorded telemetry windows, not demo samples.
+function closestForecast(t){
+  const points=state.predictionsA||[];
+  if(!points.length)return null;
+  let lo=0,hi=points.length-1;
+  while(lo+1<hi){const mid=(lo+hi)>>1;if(points[mid].t<t)lo=mid;else hi=mid;}
+  const p= Math.abs(points[lo].t-t)<=Math.abs(points[hi].t-t)?points[lo]:points[hi];
+  return Math.abs(p.t-t)<=1.25?p:null;
+}
+function renderModelFrame(time){
+  const sample=closestForecast(time);
+  if(!sample){$('model-prediction').textContent='—';$('model-observed').textContent='—';$('neural-time').textContent='SYNCHRONIZE TELEMETRY';$('activation-nodes').replaceChildren();return;}
+  $('model-prediction').textContent=sample.predicted.toFixed(1);
+  $('model-observed').textContent=sample.actual.toFixed(1);
+  $('neural-time').textContent='FORECAST TARGET @ '+clock(sample.t)+' / PRODUCED 2S EARLIER';
+  const container=$('activation-nodes');
+  if(container.children.length!==32){
+    const frag=document.createDocumentFragment();
+    for(let i=0;i<32;i++){
+      const node=document.createElement('span');node.className='activation';node.setAttribute('role','img');
+      frag.appendChild(node);
+    }
+    container.replaceChildren(frag);
+  }
+  const max=state.latentScale||1;
+  sample.latent.forEach((value,i)=>{
+    const n=container.children[i],norm=Math.max(0,Math.min(1,Math.abs(value)/max));
+    n.style.setProperty('--activation',norm.toFixed(3));
+    n.style.setProperty('--activation-hue',value>=0?'6':'190');
+    n.title='TCN hidden channel '+String(i+1)+' · actual activation '+Number(value).toFixed(4);
+    n.setAttribute('aria-label',n.title);
+  });
+}
+async function startModelInference(ticket,lap){
+  const ml=window.RaceVectorML;
+  if(!ml){$('forecast-status').textContent='MODEL RUNTIME UNAVAILABLE';return;}
+  $('forecast-status').textContent='RUNNING VERIFIED MODEL ON RECORDED TELEMETRY';
+  try{
+    const modelState=await ml.initialize();
+    if(ticket!==modelJob)return;
+    if(modelState.status!=='READY')throw Error(modelState.error||'Model unavailable');
+    const series=await ml.infer(lap);
+    if(ticket!==modelJob)return;
+    if(series.length<3)throw Error('Insufficient complete, valid 6-second telemetry windows for this lap');
+    state.predictionsA=series;
+    state.latentScale=Math.max(.02,...series.flatMap(p=>p.latent.map(Math.abs)));
+    const e=modelState.evaluation,mae=e.test_model.mae_kmh,baseline=e.test_persistence_baseline.mae_kmh;
+    $('model-badge').textContent='VERIFIED ONNX / CPU';
+    $('forecast-status').textContent='MODEL ACTIVE · '+series.length+' ACTUAL PREDICTIONS';
+    $('model-message').textContent='2024 telemetry-trained causal TCN. Red nodes reflect measured hidden-layer output at the playback cursor, not causal explanations.';
+    $('model-mae').textContent=Number(mae).toFixed(1);
+    $('baseline-mae').textContent=Number(baseline).toFixed(1);
+    $('evaluation-label').textContent='2024 HELD-OUT TEST / '+e.n_windows.test+' WINDOWS';
+    renderChart();render();
+  }catch(error){
+    if(ticket!==modelJob)return;
+    $('model-badge').textContent='MODEL UNAVAILABLE';
+    $('forecast-status').textContent='MODEL INFERENCE UNAVAILABLE';
+    $('model-message').textContent='Neural forecast could not run: '+error.message+'. Recorded car telemetry remains usable.';
+    console.warn('RaceVector neural prediction:',error);
+  }
+}
+async function enable3d(){
+  if(current3d){$('track-3d-stage').hidden=false;el.track.hidden=true;view3dLoaded=true;$('view-mode').textContent='2D VIEW ↗';return;}
+  if(state.laps[0]?.positions?.length<3)return;
+  const stage=$('track-3d-stage');
+  try{
+    const trackModule=await import('./track3d.js');
+    if(!state.laps.length)return;
+    stage.hidden=false;el.track.hidden=true;
+    current3d=trackModule.createTrack3D(stage,state.laps);
+    current3d.setProgress(state.progress);
+    view3dLoaded=true;$('view-mode').textContent='2D VIEW ↗';
+  }catch(error){stage.hidden=true;el.track.hidden=false;view3dLoaded=false;$('view-mode').disabled=true;
+    $('track-source').textContent='2D FALLBACK / 3D NOT SUPPORTED';
+    console.warn('RaceVector 3D unavailable:',error);
+  }
+}
+function toggleView(){
+  requested3d=!view3dLoaded;
+  if(view3dLoaded){$('track-3d-stage').hidden=true;el.track.hidden=false;view3dLoaded=false;$('view-mode').textContent='3D VIEW ↗';drawTrack();}
+  else enable3d();
+}
+$('view-mode').addEventListener('click',toggleView);
+$('select-driver-a').addEventListener('change',()=>{populateLapSelect('a');setStatus('SELECTION CHANGED / LOAD TO APPLY');});
+$('select-driver-b').addEventListener('change',()=>{populateLapSelect('b');setStatus('SELECTION CHANGED / LOAD TO APPLY');});
+$('select-lap-a').addEventListener('change',()=>setStatus('SELECTION CHANGED / LOAD TO APPLY'));
+$('select-lap-b').addEventListener('change',()=>setStatus('SELECTION CHANGED / LOAD TO APPLY'));
+
 el.season.addEventListener('change',()=>populateMeetings());
 el.country.addEventListener('change',()=>populateSessions());
 el.session.addEventListener('change',syncSelection);
 el.load.addEventListener('click',load);el.play.addEventListener('click',togglePlay);el.restart.addEventListener('click',()=>{pause();state.progress=0;render()});el.scrub.addEventListener('input',()=>{pause();state.progress=Number(el.scrub.value)/1000;render()});
-window.addEventListener('resize',()=>{drawTrack()},{passive:true});document.addEventListener('keydown',e=>{if(['INPUT','SELECT','BUTTON','TEXTAREA'].includes(document.activeElement?.tagName))return;if(e.code==='Space'&&state.laps.length){e.preventDefault();togglePlay()}if(e.key==='ArrowRight'&&state.laps.length){pause();state.progress=Math.min(1,state.progress+.01);render()}if(e.key==='ArrowLeft'&&state.laps.length){pause();state.progress=Math.max(0,state.progress-.01);render()}});
+window.addEventListener('resize',()=>{drawTrack();current3d?.resize();},{passive:true});document.addEventListener('keydown',e=>{if(['INPUT','SELECT','BUTTON','TEXTAREA'].includes(document.activeElement?.tagName))return;if(e.code==='Space'&&state.laps.length){e.preventDefault();togglePlay()}if(e.key==='ArrowRight'&&state.laps.length){pause();state.progress=Math.min(1,state.progress+.01);render()}if(e.key==='ArrowLeft'&&state.laps.length){pause();state.progress=Math.max(0,state.progress-.01);render()}});
 drawTrack();
 initCatalog();
 

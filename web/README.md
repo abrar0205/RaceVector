@@ -7,3 +7,7 @@ The **Load real session** action fetches OpenF1 `/sessions`, `/drivers`, `/laps`
 There are **no embedded fabricated telemetry samples**, and the neural model panel explicitly says no checkpoint is present. API access may be rate-limited or limited by CORS, so export a real session and serve its JSON when needed.
 
 Future UI work: Three.js + React Three Fiber GPU-enhanced track ribbon based on the same real sampled coordinates; motion-aware detail transitions; input attribution and hidden activations produced by evaluated model, not random animation. Do not add invented predictions to fill UI states.
+
+
+## Neural inference and dimensional track
+The Pages deployment vendors pinned ONNX Runtime Web and Three.js assets into `web/vendor/`, while the verified training artifact is committed into `web/models/` by a separate publishing workflow. The web model forecasts speed 2 seconds ahead from 6 seconds of recorded telemetry. The neural panel shows **actual 32-channel TCN hidden states**, not weight visualizations or feature attributions. The 3D track is only available when approximate real OpenF1 location samples have been retrieved; otherwise the recorded speed/2D view stays available.

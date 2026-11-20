@@ -165,3 +165,54 @@ footer{border-color:#503035;color:#aaa0a2}
 #selected-round{text-align:right;color:#e2b5b1}
 @media(max-width:850px){.race-calendar{grid-template-columns:1fr;gap:8px}.calendar-ticker{flex-wrap:wrap}.calendar-round strong{font-size:22px}}
 @media(max-width:540px){.calendar-round{padding:13px}.calendar-round strong{font-size:19px}.calendar-round button{padding:9px;font-size:8px}.calendar-ticker{font-size:8px}}
+
+/* RACEVECTOR / PIT WALL V2 — real model + driver's table + dimensional track */
+[hidden]{display:none!important}
+.lap-selector{margin:0 0 16px;background:linear-gradient(110deg,#15141a,#10131c);border:1px solid #48353c;box-shadow:inset 3px 0 #ef4640}
+.selection-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 19px;border-bottom:1px solid #342c33;font:11px var(--mono);color:#f5b5ae;letter-spacing:.07em}
+.selection-heading small{font:9px var(--mono);color:#8ba8b5}
+.selection-grid{display:grid;grid-template-columns:1.3fr .9fr 1.3fr .9fr;gap:1px;background:#2c2933}
+.selection-grid label{display:flex;flex-direction:column;gap:8px;background:#15151d;padding:16px 16px;color:#b9a4ac;font:10px var(--mono);letter-spacing:.035em}
+.selection-grid label:first-child{box-shadow:inset 3px 0 #fb5149}
+.selection-grid label:nth-child(3){box-shadow:inset 3px 0 #54dce5}
+.selection-grid select{width:100%;background:#0e1118;color:#f3eeee;border:1px solid #453943;font:700 15px var(--head);padding:10px 7px;cursor:pointer;text-overflow:ellipsis}
+.lap-selector>p{margin:0;padding:9px 19px 12px;color:#aaa0ac;font:10px/1.6 var(--mono)}.lap-selector>p b{color:#ffe0dc}
+.circuit-controls{display:flex;align-items:center;gap:12px}
+.circuit-controls button{background:#512127;border:1px solid #8e4448;color:#ffe5e0;font:600 10px var(--mono);padding:6px 10px;letter-spacing:.03em;cursor:pointer;transition:.25s}
+.circuit-controls button:hover:not(:disabled){background:#e94a40;color:#fff}
+.circuit-controls button:disabled{opacity:.35;cursor:not-allowed}
+.track3d-stage{position:absolute;inset:0;overflow:hidden;z-index:1;cursor:grab}
+.track3d-stage:active{cursor:grabbing}
+.track3d-stage canvas{width:100%;height:100%;display:block}
+.track3d-caption{position:absolute;bottom:16px;right:16px;text-align:right;max-width:220px;background:#070d13aa;backdrop-filter:blur(8px);border-left:2px solid #fc4942;padding:6px 10px;color:#c4aeb3;font:9px/1.5 var(--mono);letter-spacing:.03em;pointer-events:none}
+.track3d-stage~.track-overlay{pointer-events:none}
+.prediction-legend{display:flex;flex-wrap:wrap;gap:15px;padding:10px 23px 12px;border-top:1px solid #342d35;background:#12151b;color:#b8a6ae;font:9px/1.4 var(--mono)}
+.prediction-legend span{display:flex;align-items:center;gap:6px}.rv-dot{height:8px;width:8px;display:inline-block;border-radius:50%}.rv-red{background:#ff4c43}.rv-cyan{background:#4bd7e2}.rv-gold{background:#ffcc5c}
+.plot-prediction{fill:none;stroke:#ffd46f;stroke-width:2.5;stroke-dasharray:6 5;stroke-linejoin:round;opacity:.93;filter:drop-shadow(0 0 3px #ffc54b80)}
+.neural-content{background:radial-gradient(ellipse at 90% 11%,#5f242d55,transparent 65%),#141117;padding:25px 24px 22px;min-height:570px}
+.model-signal{display:flex;align-items:center;gap:10px;font:10px var(--mono);color:#d7abb1;letter-spacing:.04em}
+.model-pulse{width:8px;height:8px;background:#ff4e4a;border-radius:50%;box-shadow:0 0 0 5px #fd49421c,0 0 14px #fa483e91;animation:model-pulse 2.8s ease-in-out infinite}
+@keyframes model-pulse{50%{box-shadow:0 0 0 8px #fd494200,0 0 18px #fa483e90}}
+.neural-content .neural-label{margin:19px 0 23px;font-size:clamp(36px,3.3vw,56px);line-height:.84;letter-spacing:.005em}
+.live-forecast{display:grid;grid-template-columns:1fr 1fr;border:1px solid #553940;background:#130f16}
+.live-forecast>div{display:flex;flex-direction:column;gap:5px;padding:17px 13px 14px;min-width:0}
+.live-forecast>div+div{border-left:1px solid #553940}
+.live-forecast span,.live-forecast small{font:9px var(--mono);color:#aaa0ab;letter-spacing:.02em}
+.live-forecast strong{font:italic 900 clamp(36px,4vw,58px)/.95 var(--head);color:#ffce67}
+.live-forecast>div:nth-child(2) strong{color:#f7f0ee}
+.activation-shell{border:1px solid #4c373e;background:repeating-linear-gradient(90deg,#1a141b 0 1px,#101016 1px 20px);margin-top:14px;padding:13px}
+.activation-heading{display:flex;justify-content:space-between;flex-wrap:wrap;gap:7px;margin-bottom:12px;color:#f1b2af;font:9px var(--mono);letter-spacing:.05em}
+.activation-heading small{font:8px var(--mono);color:#8baab9}
+.activation-nodes{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:7px;min-height:96px;align-items:stretch}
+.activation{display:block;min-height:36px;background:hsla(var(--activation-hue,6),91%,65%,calc(.08 + var(--activation,0)*.86));border:1px solid hsla(var(--activation-hue,6),92%,68%,calc(.14 + var(--activation,0)*.78));box-shadow:0 0 calc(var(--activation,0)*18px) hsla(var(--activation-hue,6),100%,60%,calc(var(--activation,0)*.5));transition:background .23s,border-color .23s,box-shadow .23s;clip-path:polygon(0 0,calc(100% - 6px) 0,100% 6px,100% 100%,0 100%)}
+.activation-shell p{color:#b4a5ae;font:10px/1.65 var(--sans);margin:12px 1px 0}.activation-shell b{color:#ffd7d2}
+.model-eval{display:grid;grid-template-columns:1fr 1fr;margin:13px 0;background:#1a1b22;border:1px solid #42323b}
+.model-eval>div{padding:12px;display:grid;gap:4px}.model-eval>div+div{border-left:1px solid #42323b}
+.model-eval span{font:9px var(--mono);color:#a99aa3}
+.model-eval strong{font:italic 900 32px/1 var(--head);color:#ffe9dc}
+.model-eval small{font:9px var(--mono);color:#b0a2a9}
+.model-footnote{font:8px var(--mono);letter-spacing:.07em;color:#988f98}
+#model-message{color:#c5b6bb;font:12px/1.6 var(--sans);margin:16px 0 13px}
+@media(max-width:1100px){.selection-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:540px){.selection-heading{flex-wrap:wrap}.selection-grid label{padding:12px}.selection-grid select{font-size:13px}.circuit-controls{gap:5px}.circuit-controls span{display:none}.circuit-controls button{padding:5px;font-size:9px}.neural-content{padding:17px}.activation-nodes{gap:4px}.activation{min-height:27px}.prediction-legend{gap:10px;font-size:8px}.neural-content .neural-label{font-size:42px}}
+@media(prefers-reduced-motion:reduce){.model-pulse{animation:none}.activation{transition:none}}

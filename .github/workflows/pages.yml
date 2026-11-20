@@ -26,6 +26,31 @@ jobs:
           python-version: '3.12'
       - name: Build real historical and future race calendar (metadata only)
         run: python -m pipeline.catalog --out web/data/catalog.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Vendor pinned browser inference and 3D runtime assets
+        run: |
+          npm install --prefix /tmp/racevector-vendor --no-package-lock --ignore-scripts --no-audit --no-fund onnxruntime-web@1.22.0 three@0.174.0
+          mkdir -p web/vendor/ort web/vendor/three
+          cp /tmp/racevector-vendor/node_modules/onnxruntime-web/dist/ort.min.js web/vendor/ort/
+          cp /tmp/racevector-vendor/node_modules/onnxruntime-web/dist/ort-wasm*.wasm web/vendor/ort/
+          cp /tmp/racevector-vendor/node_modules/onnxruntime-web/dist/ort-wasm*.mjs web/vendor/ort/
+          cp /tmp/racevector-vendor/node_modules/three/build/three.module.js web/vendor/three/
+      - name: Verify model metadata is real when model is present
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('web/models/evaluation.json')
+          if p.exists():
+              report=json.loads(p.read_text())
+              assert report['source']=='OpenF1 historical API'
+              assert report['window_samples']==12
+              assert (p.parent/'racevector.onnx').is_file()
+          else:
+              print('Model publishing workflow has not finished; telemetry UI remains usable')
+          PY
       - name: Prevent accidental publication of raw telemetry
         run: |
           if find web/data -type f ! -name catalog.json -print -quit | grep -q .; then
