@@ -1,0 +1,120 @@
+{
+  "source": "OpenF1 historical API",
+  "trained_at": "2026-11-20T16:59:05.859453+00:00",
+  "model": "RaceVectorTCN causal TCN v0.1",
+  "task": "predict speed 2 seconds ahead using preceding 6 seconds",
+  "features": [
+    "speed",
+    "throttle",
+    "brake",
+    "gear",
+    "rpm"
+  ],
+  "window_samples": 12,
+  "step_seconds": 0.5,
+  "horizon_seconds": 2.0,
+  "meeting_splits": {
+    "train": [
+      1232,
+      1236
+    ],
+    "val": [
+      1242
+    ],
+    "test": [
+      1246
+    ]
+  },
+  "n_windows": {
+    "train": 6931,
+    "val": 4945,
+    "test": 3961
+  },
+  "test_model": {
+    "mae_kmh": 38.12355041503906,
+    "rmse_kmh": 49.53028106689453
+  },
+  "test_persistence_baseline": {
+    "mae_kmh": 55.76929473876953,
+    "rmse_kmh": 67.8492431640625
+  },
+  "beats_persistence_on_mae": true,
+  "notes": "Test examples come exclusively from held-out race weekends. Results are not causal explanations and may not transfer to unseen seasons or car regulations.",
+  "training_history": [
+    {
+      "epoch": 1,
+      "train_loss": 0.13056919975935888,
+      "validation_loss": 0.018406478688120842
+    },
+    {
+      "epoch": 2,
+      "train_loss": 0.018325235277157407,
+      "validation_loss": 0.01620475947856903
+    },
+    {
+      "epoch": 3,
+      "train_loss": 0.013679508660663182,
+      "validation_loss": 0.013598574325442314
+    },
+    {
+      "epoch": 4,
+      "train_loss": 0.010792142384118667,
+      "validation_loss": 0.008264964446425438
+    },
+    {
+      "epoch": 5,
+      "train_loss": 0.00836205234448234,
+      "validation_loss": 0.007114910986274481
+    },
+    {
+      "epoch": 6,
+      "train_loss": 0.0074959069477936275,
+      "validation_loss": 0.007564350496977568
+    },
+    {
+      "epoch": 7,
+      "train_loss": 0.007174575662119721,
+      "validation_loss": 0.00609810883179307
+    },
+    {
+      "epoch": 8,
+      "train_loss": 0.007012376154953934,
+      "validation_loss": 0.006125750485807657
+    },
+    {
+      "epoch": 9,
+      "train_loss": 0.0068834031486079954,
+      "validation_loss": 0.0054837968200445175
+    },
+    {
+      "epoch": 10,
+      "train_loss": 0.006809112722640786,
+      "validation_loss": 0.005572692025452852
+    },
+    {
+      "epoch": 11,
+      "train_loss": 0.006760391557881833,
+      "validation_loss": 0.0059861172921955585
+    },
+    {
+      "epoch": 12,
+      "train_loss": 0.006692861353159123,
+      "validation_loss": 0.005697438959032297
+    },
+    {
+      "epoch": 13,
+      "train_loss": 0.0066625700392556764,
+      "validation_loss": 0.006811403203755617
+    },
+    {
+      "epoch": 14,
+      "train_loss": 0.006664493374293771,
+      "validation_loss": 0.006573749240487814
+    },
+    {
+      "epoch": 15,
+      "train_loss": 0.00657351998114576,
+      "validation_loss": 0.005722171161323786
+    }
+  ]
+}
