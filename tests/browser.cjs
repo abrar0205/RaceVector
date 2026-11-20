@@ -30,29 +30,42 @@ async function smoke(browser,viewport){
  const errors=[];page.on('pageerror',e=>errors.push(String(e)));
  await prepare(page);
  await page.goto(address,{waitUntil:'domcontentloaded'});
- await page.waitForFunction(()=>document.querySelector('#view-mode')?.disabled===false,{timeout:15000});
+ await page.waitForFunction(()=>document.querySelector('#track-source')?.textContent?.includes('LICENSED GEO OUTLINE'),null,{timeout:15000});
  const track=page.locator('#track-3d-stage'),button=page.locator('#view-mode');
- if(viewport.width<760)await button.click();
- await page.waitForFunction(()=>document.querySelector('#track-3d-stage')?.querySelector('canvas')&&document.querySelector('#view-mode')?.getAttribute('aria-pressed')==='true',{timeout:20000});
- assert.equal(await track.evaluate(el=>getComputedStyle(el).display!=='none'),true,'3D stage must be visible');
- assert.equal(await page.locator('#track-overlay').evaluate(el=>getComputedStyle(el).display==='none'),true,'overlay must not block 3D');
- assert.equal(await page.locator('#track').evaluate(el=>getComputedStyle(el).display==='none'),true,'2D canvas must be hidden in 3D view');
- assert.match(await page.locator('.track3d-caption').innerText(),/LICENSED GEO CIRCUIT/);
- await page.locator('#reset-camera').click();
- await button.click();
- assert.equal(await page.locator('#track').evaluate(el=>getComputedStyle(el).display!=='none'),true,'2D canvas restores');
- assert.equal(await track.evaluate(el=>getComputedStyle(el).display==='none'),true,'3D stage hides');
- await button.click();
- await page.waitForFunction(()=>document.querySelector('#track-3d-stage canvas')&&document.querySelector('#view-mode').getAttribute('aria-pressed')==='true');
+ // The runner may have no GPU/WebGL2 (CI containers often don't). Verify the real
+ // Three.js ESM module is resolvable in either case, then test the appropriate UX.
+ const moduleReady=await page.evaluate(async()=>{try{return !!(await import('./track3d.js')).createTrack3D;}catch(e){return String(e);}});
+ assert.equal(moduleReady,true,'Three.js with three.core.js must load as a browser ESM module: '+String(moduleReady));
+ const webgl2=await page.evaluate(()=>{try{return !!document.createElement('canvas').getContext('webgl2');}catch{return false;}});
+ if(viewport.width<760 && webgl2)await button.click();
+ if(webgl2){
+   try{await page.waitForFunction(()=>document.querySelector('#track-3d-stage canvas')&&document.querySelector('#view-mode').getAttribute('aria-pressed')==='true',null,{timeout:10000});}
+   catch(e){console.log('3D state',await page.evaluate(()=>({status:document.querySelector('#status-text')?.textContent,source:document.querySelector('#track-source')?.textContent,button:document.querySelector('#view-mode')?.textContent})),errors);throw e;}
+   assert.equal(await track.evaluate(el=>getComputedStyle(el).display!=='none'),true,'3D stage must be visible');
+   assert.equal(await page.locator('#track-overlay').evaluate(el=>getComputedStyle(el).display==='none'),true,'overlay must not block 3D');
+   assert.equal(await page.locator('#track').evaluate(el=>getComputedStyle(el).display==='none'),true,'2D canvas must be hidden in 3D view');
+   assert.match(await page.locator('.track3d-caption').innerText(),/LICENSED GEO CIRCUIT/);
+   await page.locator('#reset-camera').click();
+   await button.click();
+   assert.equal(await page.locator('#track').evaluate(el=>getComputedStyle(el).display!=='none'),true,'2D canvas restores');
+   assert.equal(await track.evaluate(el=>getComputedStyle(el).display==='none'),true,'3D stage hides');
+   await button.click();
+   await page.waitForFunction(()=>document.querySelector('#track-3d-stage canvas')&&document.querySelector('#view-mode').getAttribute('aria-pressed')==='true',null,{timeout:10000});
+ }else{
+   await page.waitForFunction(()=>document.querySelector('#view-mode')?.disabled===true,null,{timeout:8000});
+   assert.equal(await page.locator('#track').evaluate(el=>getComputedStyle(el).display!=='none'),true,'2D circuit remains available without WebGL2');
+   assert.equal(await track.evaluate(el=>getComputedStyle(el).display==='none'),true,'3D stage must remain hidden without WebGL2');
+   console.log('WebGL2 unavailable on CI browser; verified Three.js imports and visible 2D fallback');
+ }
  await page.locator('#load').click();
  await page.waitForFunction(()=>document.querySelector('#driver-chooser')?.hidden===false,{timeout:20000});
  await page.waitForFunction(()=>document.querySelector('#play')?.disabled===false,{timeout:20000});
  assert.match(await page.locator('#track-provenance').innerText(),/MIT GEO OUTLINE/);
- assert.equal(await page.locator('#view-mode').isDisabled(),false,'3D must be usable despite HTTP 429 on location');
+ assert.equal(await page.locator('#view-mode').isDisabled(),!webgl2,'Location HTTP 429 must not disable 3D when WebGL2 exists; otherwise 2D fallback applies');
  assert.equal(await page.locator('#chart-a').getAttribute('d')!=='',true,'actual speed trace must render');
  assert.equal(await page.locator('#chart-b').getAttribute('d')!=='',true,'comparison trace must render');
  assert.equal(errors.length,0,'unexpected JavaScript errors: '+errors.join('\n'));
- console.log('PASS browser UI, 429 circuit fallback, 2D↔3D, driver selection and speed traces @'+viewport.width);
+ console.log('PASS browser UI, 429 circuit fallback, ESM import, GPU-aware 3D/2D behavior, driver selection and traces @'+viewport.width);
  await page.close();
 }
 (async()=>{

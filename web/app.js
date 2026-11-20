@@ -15,7 +15,11 @@ let catalog = null;
 let activeMeeting = null;
 let driverMetadataSession=null, driverData=new Map(), sessionLapIndex=[];
 let current3d=null, view3dLoaded=false, requested3d=true;
-let circuitOutline=null, circuitRequest=0, cannotUse3D=false, viewTicket=0;
+function hasWebGL2(){
+  try {return !!document.createElement('canvas').getContext('webgl2',{failIfMajorPerformanceCaveat:false});}
+  catch {return false;}
+}
+let circuitOutline=null, circuitRequest=0, cannotUse3D=!hasWebGL2(), viewTicket=0;
 function clear3d(){
   ++viewTicket;
   current3d?.dispose();current3d=null;view3dLoaded=false;
@@ -28,6 +32,7 @@ function updateCircuitMetadata(){
   const measured=state.laps[0]?.positions?.length>=4;
   const fallback=!!circuitOutline;
   $('view-mode').disabled=!hasCircuit()||cannotUse3D;
+  $('view-mode').title=cannotUse3D?'3D requires WebGL2 and graphics acceleration. The licensed 2D outline remains available.':'Drag the 3D circuit to orbit and scroll to zoom';
   const source=measured?'OPENF1 RECORDED POSITIONS':fallback?'LICENSED GEO OUTLINE':'NO GEOMETRY';
   $('track-source').textContent=source;
   $('track-meta').textContent=measured?'MEASURED / APPROX':fallback?'GEO OUTLINE':'UNAVAILABLE';
