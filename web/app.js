@@ -415,7 +415,7 @@ function drawTrack(){
   const a=state.laps[0],b=state.laps[1],points=project(geometry,w,h);
   function strokePath(line,width,color,blur=0){ctx.beginPath();line.forEach((p,i)=>i?ctx.lineTo(p.px,p.py):ctx.moveTo(p.px,p.py));ctx.strokeStyle=color;ctx.lineWidth=width;ctx.lineJoin='round';ctx.lineCap='round';ctx.shadowBlur=blur;ctx.shadowColor=color;ctx.stroke();ctx.shadowBlur=0;}
   strokePath(points,17,'rgba(35,54,47,.9)');strokePath(points,9,'rgba(76,99,87,.75)');
-  const maxT=a.lap_duration;for(let i=1;i<points.length;i++){
+  for(let i=1;i<points.length;i++){
     const p=points[i-1],q=points[i];
     const v=hasMeasured?interpAt(a.car,(p.t+q.t)/2)?.speed:null;
     const hue=Math.max(0,Math.min(190,190-(v??0)/380*190));
