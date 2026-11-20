@@ -46,7 +46,7 @@
         const t=start+n*STEP;
         while(i+1<segment.length&&segment[i+1].t<t)i++;
         const a=segment[i],b=segment[Math.min(i+1,segment.length-1)];
-        if(FEATURES.some(k=>!Number.isFinite(Number(a[k]))||!Number.isFinite(Number(b[k])))){grid.push(null);continue;}
+        if(FEATURES.some(k=>a[k]==null||b[k]==null||!Number.isFinite(Number(a[k]))||!Number.isFinite(Number(b[k])))){grid.push(null);continue;}
         const ratio=Math.max(0,Math.min(1,(t-a.t)/(b.t-a.t||1)));
         grid.push(FEATURES.map((key,f)=> (Number(a[key])+(Number(b[key])-Number(a[key]))*ratio)/SCALES[f]));
       }

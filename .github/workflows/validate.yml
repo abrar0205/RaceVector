@@ -32,6 +32,27 @@ jobs:
           for element_id in required:
               assert f'id="{element_id}"' in text, element_id
           PYTEST
+      - name: Verify ONNX model predictions and 32 real hidden channels
+        shell: bash
+        run: |
+          if test -f web/models/racevector.onnx; then
+            pip install 'onnxruntime>=1.20,<2'
+            python - <<'PYMODEL'
+          import json
+          from pathlib import Path
+          import numpy as np
+          import onnxruntime as ort
+          model=Path('web/models/racevector.onnx')
+          report=json.loads(Path('web/models/evaluation.json').read_text())
+          assert report['source']=='OpenF1 historical API'
+          session=ort.InferenceSession(str(model),providers=['CPUExecutionProvider'])
+          inputs={session.get_inputs()[0].name:np.zeros((2,12,5),dtype=np.float32)}
+          preds,acts=session.run(None,inputs)
+          assert preds.shape==(2,) and acts.shape==(2,32), (preds.shape,acts.shape)
+          assert np.isfinite(preds).all() and np.isfinite(acts).all()
+          print('Verified ONNX prediction and real 32-channel hidden-state output shapes')
+          PYMODEL
+          fi
       - name: Confirm no model success is claimed without evaluation
         shell: bash
         run: |
