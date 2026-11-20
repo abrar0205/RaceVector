@@ -146,3 +146,22 @@ footer{border-color:#503035;color:#aaa0a2}
 @media(max-width:850px){.intro-layout{grid-template-columns:1fr;gap:20px}.intro h1{font-size:clamp(90px,16vw,156px)}.intro-poster{max-width:760px;transform:rotate(-1deg)}.track-viewport{height:480px}.lab-grid{grid-template-columns:1fr}.methodology{grid-template-columns:1fr}}
 @media(max-width:540px){.site-header{min-height:70px}.logo-mark{width:45px;height:32px;font-size:26px}.logo-text{font-size:20px}.logo-text small{font-size:7px}.header-right{font-size:8px}.intro h1{font-size:clamp(71px,16vw,108px);margin:30px 0;letter-spacing:-.045em}.intro-meta{font-size:7px;letter-spacing:.08em}.intro-detail{font-size:13px}.intro-poster{transform:none;clip-path:none}.intro-poster:hover{transform:none}.poster-art{transform:rotate(-5deg) scale(1)}.poster-top,.poster-bottom{padding:15px;font-size:8px}.intro-footer{flex-wrap:wrap;gap:8px}.lab-top h2{font-size:clamp(65px,13vw,92px)}.toolbar label{flex:1 0 50%;padding:13px 15px;border-bottom:1px solid #343035}.toolbar .load-button{margin:11px;width:calc(100% - 22px)}.track-viewport{height:365px}.track-overlay strong{font-size:23px}.track-overlay p{font-size:11px}.signal-numbers strong{font-size:39px}.playbar{gap:8px;padding:12px}.replay-speed{font-size:0}.replay-speed select{padding:4px}.neural-label{font-size:37px}.methodology h2{font-size:clamp(80px,19vw,116px)}.method-steps h3{font-size:40px}}
 @media(prefers-reduced-motion:reduce){.intro-title,.intro-poster{animation:none!important}.poster-path{animation:none!important}}
+
+/* DATA-DRIVEN RACE CALENDAR — compact race-broadcast information strips */
+.race-calendar{display:grid;grid-template-columns:1fr 1fr;gap:0 12px;margin:0 0 17px}
+.calendar-round{min-width:0;display:flex;align-items:center;justify-content:space-between;gap:14px;border:1px solid #443539;background:linear-gradient(100deg,#1d1519,#111117);padding:15px 18px;position:relative;overflow:hidden}
+.calendar-round:before{content:'';position:absolute;top:0;left:0;bottom:0;width:3px;background:#f34c45}
+.calendar-next:before{background:#45d3df}
+.calendar-next{border-color:#29454e;background:linear-gradient(95deg,#102129,#111117)}
+.calendar-round>div{min-width:0;display:flex;flex-direction:column;gap:5px}
+.calendar-eyebrow{font:9px var(--mono);letter-spacing:.13em;color:#fa8b84}
+.calendar-next .calendar-eyebrow{color:#72d4df}
+.calendar-round strong{font:italic 800 clamp(17px,1.9vw,24px)/1.05 var(--head);letter-spacing:.01em;text-transform:uppercase;overflow-wrap:anywhere}
+.calendar-round button{background:transparent;border:1px solid #7d3b3f;color:#ff6a62;white-space:nowrap;padding:10px 11px;font:600 9px var(--mono);letter-spacing:.07em;transition:background .2s,color .2s}
+.calendar-round button:hover:not(:disabled){background:#f44740;color:white}
+.calendar-next button{border-color:#32616c;color:#6dd7e5}
+.calendar-next button:hover:not(:disabled){background:#2794a4;color:#fff}
+.calendar-ticker{grid-column:1/-1;display:flex;justify-content:space-between;gap:14px;padding:10px 2px;color:#a6a0a7;font:9px var(--mono);letter-spacing:.07em}
+#selected-round{text-align:right;color:#e2b5b1}
+@media(max-width:850px){.race-calendar{grid-template-columns:1fr;gap:8px}.calendar-ticker{flex-wrap:wrap}.calendar-round strong{font-size:22px}}
+@media(max-width:540px){.calendar-round{padding:13px}.calendar-round strong{font-size:19px}.calendar-round button{padding:9px;font-size:8px}.calendar-ticker{font-size:8px}}

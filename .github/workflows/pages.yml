@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    # Rebuild the public race calendar each day (UTC); source updates nightly.
+    - cron: "17 3 * * *"
 permissions:
   contents: read
   pages: write
@@ -18,10 +21,15 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - name: Check shipped frontend has no invented historical demo file
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build real historical and future race calendar (metadata only)
+        run: python -m pipeline.catalog --out web/data/catalog.json
+      - name: Prevent accidental publication of raw telemetry
         run: |
-          if test -d web/data && find web/data -name '*.json' -print -quit | grep -q .; then
-            echo 'Review data redistribution rights before publishing sourced records' >&2
+          if find web/data -type f ! -name catalog.json -print -quit | grep -q .; then
+            echo 'Refusing to publish recorded telemetry without rights review' >&2
             exit 1
           fi
       - uses: actions/configure-pages@v5

@@ -11,18 +11,66 @@ const el = {
   cursor:$('chart-playhead'),play:$('play'),restart:$('restart'),scrub:$('scrub'),time:$('play-time'),percent:$('play-percent')
 };
 let state = {laps:[],progress:0,playing:false,previousFrame:0,animationId:0,session:null};
+let catalog = null;
+let activeMeeting = null;
+let apiQueue = Promise.resolve();
+let lastApiCall = 0;
+const READY_DELAY = 31 * 60 * 1000; // OpenF1 historical access starts 30 minutes after a session ends.
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const ready = session => session && Number.isFinite(Date.parse(session.date_end)) && Date.now() > Date.parse(session.date_end) + READY_DELAY;
+const dateLabel = date => {const d = new Date(date);return Number.isFinite(+d)?new Intl.DateTimeFormat('en-GB',{day:'2-digit',month:'short',year:'numeric',timeZone:'UTC'}).format(d):'DATE TBC';};
+function queueApi(fn){
+  const task = apiQueue.catch(()=>{}).then(async()=>{
+    await sleep(Math.max(0, lastApiCall + 700 - Date.now()));
+    lastApiCall = Date.now();
+    return fn();
+  });
+  apiQueue = task.catch(()=>{});
+  return task;
+}
+
 const NUM = n => (n===null||n===undefined||n==='')?null:(Number.isFinite(Number(n))?Number(n):null);
 const stamp = x => {const t = Date.parse(x);return Number.isFinite(t)?t:NaN};
 const pretty = seconds => seconds==null?'NO LAP':seconds.toFixed(3)+' S';
 const clock = t => {if(!Number.isFinite(t))return '00:00.0';const m=Math.floor(t/60),s=t%60;return String(m).padStart(2,'0')+':'+s.toFixed(1).padStart(4,'0')};
 function setStatus(text,type=''){el.status.textContent=text;el.led.className='status-led '+type;}
-async function request(endpoint,params={}){
+// Cache immutable historical responses in the visitor's browser and rate-limit all
+// shared OpenF1 requests. Do not persist or redistribute raw telemetry in GitHub.
+async function request(endpoint,params={},options={}){
   const url=new URL(API+'/'+endpoint);
   for(const [key,value] of Object.entries(params))url.searchParams.set(key,String(value));
-  const response=await fetch(url.toString(),{headers:{'Accept':'application/json'}});
-  if(!response.ok)throw new Error('OpenF1 '+endpoint+' returned HTTP '+response.status);
-  const json=await response.json();if(!Array.isArray(json))throw new Error('Unexpected OpenF1 response');return json;
+  let cache=null;
+  if('caches' in window && options.cache!==false){
+    try {cache=await caches.open('racevector-historical-v2');
+      const hit=await cache.match(url.toString());
+      if(hit){const data=await hit.json();if(Array.isArray(data))return data;}
+    } catch {cache=null;}
+  }
+  const attempts=options.optional?1:4;
+  for(let attempt=0;attempt<attempts;attempt++){
+    let response;
+    try {response=await queueApi(()=>fetch(url.toString(),{headers:{Accept:'application/json'}}));}
+    catch(error){if(options.optional)return [];if(attempt===attempts-1)throw error;await sleep(1200*(attempt+1));continue;}
+    if(response.ok){
+      const json=await response.json();
+      if(!Array.isArray(json))throw new Error('Unexpected OpenF1 '+endpoint+' response');
+      if(cache && json.length){try{await cache.put(url.toString(),new Response(JSON.stringify(json),{headers:{'Content-Type':'application/json'}}));}catch {/* storage may be full */}}
+      return json;
+    }
+    if(options.optional){console.warn('RaceVector: optional '+endpoint+' unavailable (HTTP '+response.status+')');return [];}
+    if(response.status!==429 && response.status<500)throw new Error('OpenF1 '+endpoint+' returned HTTP '+response.status);
+    if(attempt===attempts-1){
+      if(response.status===429)throw new Error('OpenF1 is temporarily rate-limiting requests. Please retry in a minute; previously loaded sessions remain cached.');
+      throw new Error('OpenF1 '+endpoint+' is temporarily unavailable (HTTP '+response.status+').');
+    }
+    const retrySeconds=Number(response.headers.get('Retry-After'));
+    const delay=Number.isFinite(retrySeconds)&&retrySeconds>0?Math.min(30000,retrySeconds*1000):Math.min(14000,1800*2**attempt);
+    setStatus('API BUSY / RETRYING '+(attempt+1)+'/'+(attempts-1));
+    await sleep(delay);
+  }
+  return [];
 }
+
 function fastestLaps(laps,driverNumbers){
   const quickest=new Map();
   for(const lap of laps){
@@ -43,34 +91,134 @@ function cleanLocation(raw,start,end){
     .filter(r=>Number.isFinite(r.t)&&r.t>=-.2&&r.t<=(end-start)/1000+.2&&r.x!=null&&r.y!=null)
     .sort((a,b)=>a.t-b.t).filter((r,i,arr)=>i===0||r.t>arr[i-1].t);
 }
-async function fetchLap(session,driver,lap){
+function selectedSession(){
+  return activeMeeting?.sessions?.find(s=>String(s.session_key)===el.session.value)??null;
+}
+async function fetchCarLap(session,driver,lap){
   const start=stamp(lap.date_start),end=start+lap.lap_duration*1000;
   const query={session_key:session.session_key,driver_number:driver.driver_number,'date>':new Date(start).toISOString(),'date<':new Date(end).toISOString()};
-  const [car,pos]=await Promise.all([request('car_data',query),request('location',query)]);
+  const car=await request('car_data',query);
   return {driver_number:driver.driver_number,name:driver.name_acronym||driver.broadcast_name||String(driver.driver_number),fullName:driver.full_name||'',lap_duration:lap.lap_duration,
-    session_key:session.session_key,meeting_key:session.meeting_key,car:cleanSamples(car,start,end),positions:cleanLocation(pos,start,end)};
+    session_key:session.session_key,meeting_key:session.meeting_key,car:cleanSamples(car,start,end),positions:[],query,start,end};
 }
 async function loadOnline(){
-  const year=Number(el.season.value),country=el.country.value,type=el.session.value;
-  const sessions=await request('sessions',{year,country_name:country,session_name:type});
-  if(!sessions.length)throw new Error('No matching historical session. Select another Grand Prix or season.');
-  const session=sessions.find(s=>s.session_type!=='Testing')??sessions[0];
-  const [drivers,laps]=await Promise.all([request('drivers',{session_key:session.session_key}),request('laps',{session_key:session.session_key})]);
+  const session=selectedSession();
+  if(!session||!ready(session))throw new Error('This session is scheduled or still within the historical-data delay. Select a completed session.');
+  // Session metadata is prebuilt once daily. Only two small metadata queries and
+  // two measured car traces are required to display charts and driver comparison.
+  const drivers=await request('drivers',{session_key:session.session_key});
+  const laps=await request('laps',{session_key:session.session_key});
   const distinct=new Map(drivers.map(d=>[d.driver_number,d]));
   const selected=fastestLaps(laps,new Set(distinct.keys()));
-  if(selected.length<2)throw new Error('There are fewer than two qualifying timed laps in the selected session.');
-  const output=await Promise.all(selected.map(lap=>fetchLap(session,distinct.get(lap.driver_number),lap)));
-  if(output.some(x=>x.car.length<12))throw new Error('Selected lap telemetry is incomplete. Try another session.');
+  if(selected.length<2)throw new Error('This session does not yet have two complete timed laps. Try another session.');
+  const output=[];
+  for(const lap of selected){
+    const l=await fetchCarLap(session,distinct.get(lap.driver_number),lap);
+    if(l.car.length<12)throw new Error('Selected lap telemetry is incomplete. Try another session.');
+    output.push(l);
+  }
+  // Positions are OPTIONAL and never block speed traces. Keep requests serial;
+  // a 429 for the first track request skips the second to respect the free API.
+  for(const l of output){
+    const pos=await request('location',l.query,{optional:true});
+    l.positions=cleanLocation(pos,l.start,l.end);
+    delete l.query;delete l.start;delete l.end;
+    if(l.positions.length<3)break;
+  }
   return {session, laps:output};
 }
 async function loadLocal(){
-  // Optional, deterministic fallback produced by pipeline/ingest.py (not a synthetic dataset).
-  const filename=[el.season.value,el.country.value.toLowerCase().replace(/\s+/g,'-'),el.session.value.toLowerCase()].join('-')+'.json';
+  // Local historical exports are optional. The public Pages build ships only
+  // schedule metadata, not downloadable raw car data or positions.
+  if(!activeMeeting)return null;
+  const filename=[el.season.value,activeMeeting.country_name.toLowerCase().replace(/\s+/g,'-'),selectedSession()?.session_name?.toLowerCase()].join('-')+'.json';
   try {const res=await fetch('./data/'+filename,{cache:'no-cache'});if(!res.ok)return null;
     const data=await res.json();if(data.source!=='OpenF1 historical API'||!Array.isArray(data.laps)||data.laps.length<2)return null;
     if(data.laps.some(l=>!l.car?.length))return null;return data;
   } catch {return null;}
 }
+
+function allMeetings(){return (catalog?.seasons??[]).flatMap(s=>s.meetings.map(m=>({...m,year:s.year})));}
+function allSessions(){return allMeetings().flatMap(m=>m.sessions.map(s=>({...s,meeting:m})));}
+function latestCompleted(){
+  // Prefer the most recent FINISHED RACE, not an incomplete race weekend.
+  return allSessions().filter(ready).sort((a,b)=>Date.parse(b.date_end)-Date.parse(a.date_end))[0]??null;
+}
+function latestCompletedRace(){
+  return allSessions().filter(s=>ready(s)&&s.session_name==='Race').sort((a,b)=>Date.parse(b.date_end)-Date.parse(a.date_end))[0]
+    ??allSessions().filter(ready).sort((a,b)=>Date.parse(b.date_end)-Date.parse(a.date_end))[0]??null;
+}
+function nextScheduled(){
+  return allSessions().filter(s=>!ready(s)&&Number.isFinite(stamp(s.date_start))&&stamp(s.date_start)>Date.now())
+    .sort((a,b)=>stamp(a.date_start)-stamp(b.date_start))[0]??null;
+}
+function choose(session){
+  if(!session)return;
+  el.season.value=String(session.meeting.year);
+  populateMeetings(String(session.meeting.meeting_key),String(session.session_key));
+}
+function populateMeetings(preferredMeeting=null,preferredSession=null){
+  const season=catalog?.seasons.find(s=>String(s.year)===el.season.value);
+  const meetings=[...(season?.meetings??[])].sort((a,b)=>stamp(b.date_start)-stamp(a.date_start));
+  el.country.replaceChildren(...meetings.map(m=>{const o=document.createElement('option');o.value=String(m.meeting_key);o.textContent=m.meeting_name.toUpperCase();return o;}));
+  if(preferredMeeting&&meetings.some(m=>String(m.meeting_key)===preferredMeeting))el.country.value=preferredMeeting;
+  populateSessions(preferredSession);
+}
+function populateSessions(preferredSession=null){
+  const season=catalog?.seasons.find(s=>String(s.year)===el.season.value);
+  activeMeeting=season?.meetings.find(m=>String(m.meeting_key)===el.country.value)??null;
+  const sessions=[...(activeMeeting?.sessions??[])].sort((a,b)=>stamp(b.date_start)-stamp(a.date_start));
+  el.session.replaceChildren(...sessions.map(x=>{const o=document.createElement('option');o.value=String(x.session_key);
+    o.textContent=x.session_name.toUpperCase()+(ready(x)?' ✓':' · SCHEDULED');return o;}));
+  const first= sessions.find(s=>ready(s)&&s.session_name==='Race')??sessions.find(ready)??sessions[0];
+  if(preferredSession&&sessions.some(x=>String(x.session_key)===preferredSession))el.session.value=preferredSession;
+  else if(first)el.session.value=String(first.session_key);
+  syncSelection();
+}
+function syncSelection(){
+  const s=selectedSession(),valid=ready(s);
+  el.load.disabled=!valid;
+  el.load.innerHTML=(valid?'LOAD RECORDED SESSION':'AWAITING SESSION')+' <span>↗</span>';
+  if(!s){setStatus('NO SESSION IN CALENDAR');return;}
+  if(!valid)setStatus('SCHEDULED / TELEMETRY AFTER SESSION');
+  else setStatus('RECORDED SESSION AVAILABLE');
+  const label=document.getElementById('selected-round');
+  if(label)label.textContent=(activeMeeting?.meeting_name??'GRAND PRIX')+' · '+s.session_name+' · '+dateLabel(s.date_start)+(valid?' / RECORDED':' / SCHEDULED');
+}
+function updateRoundSummary(){
+  const last=latestCompletedRace(),next=nextScheduled();
+  const latestLabel=document.getElementById('latest-round-label'),nextLabel=document.getElementById('next-round-label');
+  if(latestLabel)latestLabel.textContent=last?last.meeting.meeting_name+' · '+dateLabel(last.date_start):'NO RECORDED RACE';
+  if(nextLabel)nextLabel.textContent=next?next.meeting.meeting_name+' · '+dateLabel(next.date_start):'CALENDAR NOT RELEASED';
+  const latestButton=document.getElementById('latest-race'),nextButton=document.getElementById('next-race');
+  latestButton.disabled=!last;nextButton.disabled=!next;
+  latestButton.addEventListener('click',()=>choose(last));nextButton.addEventListener('click',()=>choose(next));
+  const freshness=document.getElementById('calendar-updated');
+  if(freshness)freshness.textContent='SOURCE SYNC '+dateLabel(catalog.updated_at)+' / '+allMeetings().length+' WEEKENDS';
+}
+async function initCatalog(){
+  setStatus('LOADING RACE CALENDAR');
+  try{
+    const response=await fetch('./data/catalog.json',{cache:'no-cache'});
+    if(!response.ok)throw new Error('Calendar metadata not deployed');
+    const data=await response.json();
+    if(!Array.isArray(data.seasons)||!data.seasons.some(s=>s.meetings?.length))throw new Error('Invalid calendar metadata');
+    catalog=data;
+    const years=[...catalog.seasons].sort((a,b)=>b.year-a.year);
+    el.season.replaceChildren(...years.map(s=>{const o=document.createElement('option');o.value=String(s.year);o.textContent=String(s.year);return o;}));
+    const last=latestCompletedRace();
+    if(last)choose(last);
+    else {el.season.value=String(years[0].year);populateMeetings();}
+    updateRoundSummary();
+  }catch(error){
+    console.error('RaceVector calendar could not be loaded:',error);
+    setStatus('CALENDAR UNAVAILABLE / RETRY LATER','error');
+    el.load.disabled=true;
+    const label=document.getElementById('selected-round');
+    if(label)label.textContent='Race calendar is temporarily unavailable. Please refresh to retry.';
+  }
+}
+
 async function load(){
   cancelAnimationFrame(state.animationId);state.playing=false;state.progress=0;state.previousFrame=0;
   state.laps=[];state.session=null;el.play.disabled=true;el.restart.disabled=true;el.scrub.disabled=true;
@@ -82,17 +230,22 @@ async function load(){
   try{
     const data=await loadLocal()||await loadOnline();
     state.laps=data.laps;state.session=data.session;state.progress=0;
-    el.overlay.hidden=state.laps[0].positions.length>=3;
+    const trackAvailable=state.laps[0].positions.length>=3;
+    el.overlay.hidden=trackAvailable;
+    if(!trackAvailable){
+      el.overlay.querySelector('strong').textContent='POSITION DATA UNAVAILABLE';
+      el.overlay.querySelector('p').textContent='Recorded speed, throttle, braking and both lap traces are available below. OpenF1 location samples are currently missing or rate-limited; the charts still work.';
+    }
     el.a.textContent=data.laps[0].name;el.b.textContent=data.laps[1].name;
     el.at.textContent=pretty(data.laps[0].lap_duration);el.bt.textContent=pretty(data.laps[1].lap_duration);
     $('legend-a').textContent=data.laps[0].name;$('legend-b').textContent=data.laps[1].name;
-    $('track-source').textContent=data.session.circuit_short_name||'APPROXIMATE LOCATIONS';
-    $('track-meta').textContent=data.session.circuit_short_name||'AVAILABLE';
+    $('track-source').textContent=trackAvailable?(activeMeeting?.circuit_short_name||'APPROXIMATE LOCATIONS'):'POSITION FEED UNAVAILABLE';
+    $('track-meta').textContent=trackAvailable?(activeMeeting?.circuit_short_name||'AVAILABLE'):'TELEMETRY ONLY';
     $('provenance-session').textContent='SESSION '+data.session.session_key+' / '+(data.session.session_name||el.session.value);
     el.play.disabled=false;el.restart.disabled=false;el.scrub.disabled=false;
-    renderChart();render();setStatus('REAL SESSION LOADED','active');
+    renderChart();render();setStatus(trackAvailable?'REAL SESSION LOADED':'TELEMETRY LOADED / TRACK OPTIONAL','active');
   }catch(error){setStatus('DATA NOT AVAILABLE','error');el.overlay.hidden=false;el.overlay.querySelector('strong').textContent='TELEMETRY NOT AVAILABLE';el.overlay.querySelector('p').textContent=error.message+' You can also pre-export a real historical session using the ingestion script.';}
-  finally{el.load.disabled=false;el.load.innerHTML='LOAD REAL SESSION <span>↗</span>';}
+  finally{el.load.disabled=!ready(selectedSession());el.load.innerHTML='LOAD RECORDED SESSION <span>↗</span>';}
 }
 function interpAt(items,t){
   if(!items.length)return null;
@@ -146,9 +299,13 @@ function drawTrack(){
     ctx.beginPath();ctx.arc(x,y,14,0,Math.PI*2);ctx.fillStyle=color+'27';ctx.fill();ctx.beginPath();ctx.arc(x,y,6,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();ctx.fillStyle='#10171c';ctx.font='bold 10px monospace';ctx.textAlign='center';ctx.fillText(letter,x,y-19);
   }marker(a,'#ff4540','A');marker(b,'#42d7e6','B');
 }
+el.season.addEventListener('change',()=>populateMeetings());
+el.country.addEventListener('change',()=>populateSessions());
+el.session.addEventListener('change',syncSelection);
 el.load.addEventListener('click',load);el.play.addEventListener('click',togglePlay);el.restart.addEventListener('click',()=>{pause();state.progress=0;render()});el.scrub.addEventListener('input',()=>{pause();state.progress=Number(el.scrub.value)/1000;render()});
 window.addEventListener('resize',()=>{drawTrack()},{passive:true});document.addEventListener('keydown',e=>{if(['INPUT','SELECT','BUTTON','TEXTAREA'].includes(document.activeElement?.tagName))return;if(e.code==='Space'&&state.laps.length){e.preventDefault();togglePlay()}if(e.key==='ArrowRight'&&state.laps.length){pause();state.progress=Math.min(1,state.progress+.01);render()}if(e.key==='ArrowLeft'&&state.laps.length){pause();state.progress=Math.max(0,state.progress-.01);render()}});
 drawTrack();
+initCatalog();
 
 // Track scroll reading progress, not race progress. No fictional timing data.
 const progressRail = document.getElementById('race-progress-bar');
