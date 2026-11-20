@@ -1,0 +1,6 @@
+# Used for local training. CPU wheels available from PyPI, or install torch using official OS instructions.
+numpy>=1.26,<3
+pytest>=8,<10
+torch>=2.3,<3
+# For optional --onnx export:
+# onnx>=1.16,<2

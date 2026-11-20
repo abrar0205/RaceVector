@@ -1,0 +1,30 @@
+name: Validate RaceVector
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check web/app.js
+      - name: Confirm no model success is claimed without evaluation
+        shell: bash
+        run: |
+          if test -f web/model/racevector.onnx && ! test -f web/model/evaluation.json; then
+            echo 'Model is not accompanied by evaluation report' >&2
+            exit 1
+          fi

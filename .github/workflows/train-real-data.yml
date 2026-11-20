@@ -1,0 +1,47 @@
+name: Train RaceVector on real historical telemetry
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install CPU ML dependencies and ONNX
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt 'onnx>=1.16,<2'
+      - name: Download ONLY actual historical OpenF1 car telemetry
+        run: |
+          python -m pipeline.ingest --year 2024 --country Monaco --session Qualifying --driver-limit 8 --max-laps-per-driver 3 --out web/data
+          python -m pipeline.ingest --year 2024 --country Japan --session Qualifying --driver-limit 8 --max-laps-per-driver 3 --out web/data
+          python -m pipeline.ingest --year 2024 --country Singapore --session Qualifying --driver-limit 8 --max-laps-per-driver 3 --out web/data
+          python -m pipeline.ingest --year 2024 --country Belgium --session Qualifying --driver-limit 8 --max-laps-per-driver 3 --out web/data
+      - name: Verify training input and held-out group boundaries
+        run: |
+          python -m pytest -q
+          python - <<'PY'
+          from ml.dataset import read_laps, split_by_meeting
+          laps=list(read_laps('web/data'))
+          _,groups=split_by_meeting(laps)
+          print('Real laps:',len(laps))
+          print('Meeting groups:',groups)
+          PY
+      - name: Train and evaluate actual model
+        run: python -m ml.train --data web/data --out models --epochs 25 --onnx
+      - name: Upload evaluated model outputs (not raw telemetry)
+        uses: actions/upload-artifact@v4
+        with:
+          name: racevector-2024-qualifying-evaluated
+          path: |
+            models/racevector.pt
+            models/racevector.onnx
+            models/evaluation.json
+          if-no-files-found: error
+          retention-days: 14
